@@ -1,4 +1,4 @@
-// Notion API 최신 규격 대응 - 제로 설정 자동 탐색 동기화 스크립트
+// Notion API 최신 규격 대응 - 워크스페이스 진단 및 완벽 탐색 동기화 스크립트
 import { webcrypto as crypto } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import fs from 'node:fs/promises';
@@ -80,33 +80,37 @@ async function notion(method, path, body) {
   throw new Error('Notion API 요청 실패 (최대 재시도 초과)');
 }
 
-/* ───── 스마트 자동 탐색: 봇에게 연결된 노션 데이터베이스 100% 자동 매칭 ───── */
+/* ───── 스마트 자동 탐색: 워크스페이스 검증 및 DB 자동 매칭 ───── */
 async function resolveDataSourceId() {
-  console.log('\n=== [2/4] Notion 통합 봇 및 연결 항목 스마트 자동 탐색 ===');
+  console.log('\n=== [2/4] Notion 통합 봇 및 워크스페이스 진단 ===');
 
-  // 1. 봇 정보 확인
+  // 1. 봇 및 소유자 워크스페이스 확인
   let botInfo;
   try {
     botInfo = await notion('GET', '/users/me');
-    console.log(`• 통합 봇 인증 성공! 이름: "${botInfo.name}" (ID: ${botInfo.id})`);
+    const wsName = botInfo.bot?.owner?.workspace_name || botInfo.bot?.workspace_name || '(확인불가)';
+    console.log(`• 통합 봇 인증 성공!`);
+    console.log(`  - 봇 이름: "${botInfo.name}"`);
+    console.log(`  - 소속 워크스페이스: "${wsName}"`);
   } catch (err) {
     console.error(`❌ 토큰 인증 실패: ${err.message}`);
     throw err;
   }
 
-  // 2. 통합 봇에게 공유된 모든 항목 전체 검색 (가장 확실한 1순위 탐색)
+  // 2. 통합 봇에게 공유된 모든 노션 항목 전체 검색 (바디 {} 로 100% 호환)
   let accessibleItems = [];
   try {
-    const searchRes = await notion('POST', '/search', {
-      in_trash: false,
-      page_size: 50
-    });
+    const searchRes = await notion('POST', '/search', {});
     accessibleItems = searchRes.results || [];
   } catch (err) {
-    console.log(`  (/search 호출 에러: ${err.message})`);
+    console.log(`  (기본 /search 실패, in_trash: false 재시도: ${err.message})`);
+    try {
+      const searchRes2 = await notion('POST', '/search', { in_trash: false });
+      accessibleItems = searchRes2.results || [];
+    } catch {}
   }
 
-  console.log(`• 봇 "${botInfo.name}" 에게 공유된 항목: 총 ${accessibleItems.length}개 발견`);
+  console.log(`\n• 현재 봇 "${botInfo.name}" 에게 연결된 노션 페이지/DB: 총 ${accessibleItems.length}개 발견`);
   for (const item of accessibleItems) {
     const objType = item.object;
     let title = '(제목 없음)';
@@ -120,26 +124,11 @@ async function resolveDataSourceId() {
         title = (item.properties[titlePropKey].title || []).map(t => t.plain_text).join('');
       }
     }
-    console.log(`  - [${objType}] "${title}" (ID: ${item.id.replace(/-/g, '')})`);
+    const cleanId = item.id.replace(/-/g, '');
+    console.log(`  - [${objType}] "${title}" (ID: ${cleanId})`);
   }
 
-  // 3. 사용자가 입력한 RAW_ID와 정확히 일치하는 항목이 있는지 확인
-  if (RAW_ID) {
-    const matched = accessibleItems.find(i => i.id.replace(/-/g, '') === RAW_ID);
-    if (matched) {
-      console.log(`\n✓ 입력하신 ID(${RAW_ID})와 정확히 일치하는 [${matched.object}] 항목을 찾았습니다!`);
-      if (matched.object === 'data_source') return RAW_ID;
-      if (matched.object === 'database') {
-        return await resolveDbToDataSource(matched.id);
-      }
-      if (matched.object === 'page') {
-        const childDs = await findChildDatabaseInPage(matched.id);
-        if (childDs) return childDs;
-      }
-    }
-  }
-
-  // 4. 입력된 ID 매칭이 안 되면, 봇에게 공유된 항목 중 data_source 또는 database 자동 선택
+  // 3. 만약 공유된 항목 중 data_source가 있으면 최우선 연결
   const dsItem = accessibleItems.find(i => i.object === 'data_source');
   if (dsItem) {
     const dsId = dsItem.id.replace(/-/g, '');
@@ -147,37 +136,52 @@ async function resolveDataSourceId() {
     return dsId;
   }
 
+  // 4. database 항목이 있으면 연결
   const dbItem = accessibleItems.find(i => i.object === 'database');
   if (dbItem) {
     console.log(`\n🎉 [자동 매칭 성공] 발견된 Database(ID: ${dbItem.id})로 자동 연결합니다!`);
     return await resolveDbToDataSource(dbItem.id);
   }
 
-  // 5. 페이지 항목만 있다면 그 안의 데이터베이스 블록 탐색
+  // 5. 사용자가 입력한 RAW_ID 직접 조회 시도 (GET /databases, GET /pages)
+  if (RAW_ID) {
+    console.log(`\n• 입력된 ID(${RAW_ID}) 직접 조회 시도 중...`);
+    try {
+      const dbObj = await notion('GET', `/databases/${RAW_ID}`);
+      console.log(`✓ 입력된 ID로 Database 직접 조회 성공! (${dbObj.title?.map(t => t.plain_text).join('')})`);
+      return await resolveDbToDataSource(RAW_ID);
+    } catch (e1) {
+      console.log(`  - databases/${RAW_ID} 조회 실패: ${e1.details || e1.message}`);
+    }
+
+    try {
+      const pageObj = await notion('GET', `/pages/${RAW_ID}`);
+      console.log(`✓ 입력된 ID는 페이지입니다. 페이지 내부 데이터베이스를 탐색합니다...`);
+      const childDs = await findChildDatabaseInPage(RAW_ID);
+      if (childDs) return childDs;
+    } catch (e2) {
+      console.log(`  - pages/${RAW_ID} 조회 실패: ${e2.details || e2.message}`);
+    }
+  }
+
+  // 6. 페이지 항목들이 있다면 페이지 내부 탐색
   const pageItems = accessibleItems.filter(i => i.object === 'page');
   for (const page of pageItems) {
     const childDs = await findChildDatabaseInPage(page.id);
     if (childDs) {
-      console.log(`\n🎉 [자동 매칭 성공] 페이지 내부의 데이터베이스로 자동 연결합니다!`);
+      console.log(`\n🎉 [자동 매칭 성공] 페이지 [${page.id}] 내부의 데이터베이스로 자동 연결합니다!`);
       return childDs;
     }
   }
 
-  // 6. 만약 RAW_ID로 직접 쿼리 가능한지 마지막 확인
-  if (RAW_ID) {
-    try {
-      await notion('POST', `/data_sources/${RAW_ID}/query`, { page_size: 1 });
-      return RAW_ID;
-    } catch {}
-  }
-
-  // 7. 여기까지 왔는데 아무것도 없다면 -> 진짜로 봇에게 공유된 것이 0개인 경우
+  // 7. 여기까지 왔는데 아무것도 없다면 -> 안내 메시지 출력
+  const ws = botInfo.bot?.owner?.workspace_name || '(소속 워크스페이스)';
   throw new Error(
     `통합 봇 "${botInfo.name}" 에게 공유된 데이터베이스가 0개입니다.\n\n` +
-    `[원인 및 해결 방법]\n` +
-    `1. 노션(Notion) 화면에서 동기화할 데이터베이스 페이지를 엽니다.\n` +
-    `2. 우측 상단 [···] -> [연결(Connections)] 에 봇 "${botInfo.name}" 이 정상 추가되어 있는지 확인하세요.\n` +
-    `3. (중요) 혹시 노션 계정이나 워크스페이스가 2개 이상이어서 다른 워크스페이스에 추가하지 않았는지 확인하세요.`
+    `[가장 중요한 점검 사항]\n` +
+    `현재 토큰은 [${ws}] 워크스페이스에 연결되어 있습니다.\n` +
+    `노션 화면 좌측 상단에서 현재 열려 있는 워크스페이스 이름이 [${ws}] 가 맞는지 꼭 확인하세요!\n` +
+    `(노션 계정에 여러 워크스페이스가 있는 경우, 다른 워크스페이스의 데이터베이스에 추가하면 API가 찾지 못합니다.)`
   );
 }
 
@@ -360,10 +364,8 @@ async function fetchPageMarkdown(pageId) {
 async function main() {
   await fs.mkdir(`${OUT}/n`, { recursive: true });
 
-  // 1. 봇에게 연결된 노션 데이터소스 자동 해석
   const targetId = await resolveDataSourceId();
 
-  // 2. 암호화 키 생성 및 캐시 확인
   console.log(`\n=== [3/4] 암호화 키 도출 및 캐시 검사 ===`);
   const prevMeta = await fs.readFile(`${OUT}/meta.json`, 'utf8').then(JSON.parse, () => null);
   const salt = prevMeta?.salt ? unb64(prevMeta.salt) : crypto.getRandomValues(new Uint8Array(16));
@@ -379,7 +381,6 @@ async function main() {
     console.log(`• 신규 빌드 (전체 동기화 시작)`);
   }
 
-  // 3. 전체 노트 조회 및 본문 수집
   console.log(`\n=== [4/4] 노션 노트 및 본문 수집 시작 ===`);
   const nodes = await queryAll(targetId);
   console.log(`• 노션 전체 노트 수: ${nodes.length}개 발견`);
