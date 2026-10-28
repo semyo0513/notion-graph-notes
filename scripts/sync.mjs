@@ -4,8 +4,15 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import fs from 'node:fs/promises';
 
 const { NOTION_TOKEN, DATA_SOURCE_ID, DATA_PASSPHRASE } = process.env;
+
+console.log('=== [1/4] GitHub Secrets 환경변수 확인 ===');
+console.log(`• NOTION_TOKEN: ${NOTION_TOKEN ? '설정됨 (길이: ' + NOTION_TOKEN.length + '자)' : '❌ 누락됨!'}`);
+console.log(`• DATA_SOURCE_ID: ${DATA_SOURCE_ID ? '설정됨 (입력값: ' + DATA_SOURCE_ID + ')' : '❌ 누락됨!'}`);
+console.log(`• DATA_PASSPHRASE: ${DATA_PASSPHRASE ? '설정됨' : '❌ 누락됨!'}`);
+
 if (!NOTION_TOKEN || !DATA_SOURCE_ID || !DATA_PASSPHRASE) {
-  console.error('[오류] GitHub Secrets에 NOTION_TOKEN, DATA_SOURCE_ID, DATA_PASSPHRASE 가 설정되어 있지 않습니다.');
+  console.error('\n[치명적 오류] GitHub Secrets에 3가지 값이 모두 등록되어 있어야 합니다.');
+  console.error('Settings -> Secrets and variables -> Actions 에서 NOTION_TOKEN, DATA_SOURCE_ID, DATA_PASSPHRASE 를 확인하세요.');
   process.exit(1);
 }
 
@@ -30,6 +37,7 @@ function extractNotionId(input) {
 }
 
 const CLEAN_DB_ID = extractNotionId(DATA_SOURCE_ID);
+console.log(`• 추출된 최종 Database ID: ${CLEAN_DB_ID}\n`);
 const NOTION = 'https://api.notion.com/v1';
 const NOTION_VERSION = '2026-03-11';
 const OUT = 'dist/data';
@@ -62,17 +70,28 @@ async function notion(method, path, body) {
     if (res.ok) return res.json();
 
     const errText = await res.text().catch(() => '');
+    let errCode = '';
+    let errMsg = errText;
+    try {
+      const errJson = JSON.parse(errText);
+      errCode = errJson.code || '';
+      errMsg = errJson.message || errText;
+    } catch {}
+
     if (res.status === 404) {
       throw new Error(
-        `Notion 404 Not Found: 데이터베이스 ID(${CLEAN_DB_ID})를 찾을 수 없습니다.\n` +
-        `해당 노션 DB 페이지 우측 상단 [···] -> [연결(Connections)]에 생성하신 통합을 추가했는지 확인하세요.`
+        `Notion API 404 오류: 데이터베이스 ID(${CLEAN_DB_ID})를 찾을 수 없습니다.\n` +
+        `Notion 응답 메시지: [${errCode}] ${errMsg}\n\n` +
+        `[해결 체크리스트]\n` +
+        `1. 노션 DB 페이지 우측 상단 [···] -> [연결(Connections)]에 생성하신 통합 봇을 반드시 추가했는지 확인하세요.\n` +
+        `2. 만약 입력하신 주소가 일반 페이지 주소라면, 데이터베이스 자체의 [링크 복사]를 눌러 데이터베이스 ID를 넣어주세요.`
       );
     }
     if (res.status === 401) {
-      throw new Error('Notion 401 Unauthorized: NOTION_TOKEN이 올바르지 않습니다.');
+      throw new Error(`Notion API 401 인증 실패: 토큰이 올바르지 않습니다. (응답: ${errMsg})`);
     }
 
-    throw new Error(`Notion ${res.status} ${method} ${path.split('?')[0]}: ${errText.slice(0, 100)}`);
+    throw new Error(`Notion API [${res.status}] ${method} ${path.split('?')[0]}: ${errMsg}`);
   }
   throw new Error('Notion API 요청 실패 (최대 재시도 초과)');
 }
