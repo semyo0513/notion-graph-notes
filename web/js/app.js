@@ -127,6 +127,109 @@ class App {
     this.folderSelect.addEventListener('change', () => this.handleFilterChange());
     this.tagSelect.addEventListener('change', () => this.handleFilterChange());
 
+    // 색상 테마 모드 선택
+    document.getElementById('color-mode-select')?.addEventListener('change', (e) => {
+      this.graphView.setColorMode(e.target.value);
+    });
+
+    // 3D / 2D 우주 모드 전환
+    document.getElementById('btn-toggle-3d')?.addEventListener('click', (e) => {
+      this.graphView.toggle3D();
+      const is3D = this.graphView.mode3D;
+      e.currentTarget.style.color = is3D ? '#a855f7' : 'inherit';
+      this.showToast(is3D ? '🌐 3D 우주 은하 모드로 전환되었습니다.' : '2D 평면 그래프로 전환되었습니다.', 2000);
+    });
+
+    // 고아 노트(Orphan) 발굴 필터
+    document.getElementById('btn-orphan-filter')?.addEventListener('click', (e) => {
+      this.graphView.toggleOrphansOnly();
+      const active = this.graphView.showOrphansOnly;
+      e.currentTarget.style.color = active ? '#ef4444' : 'inherit';
+      const orphans = this.rawNodes.filter(n => !n.neighbors || n.neighbors.size === 0);
+      this.showToast(active ? `🔍 연결선 없는 고아 노트 ${orphans.length}개 강조` : '전체 노드 표시로 복귀', 2000);
+    });
+
+    // 고해상도 PNG 이미지 내보내기
+    document.getElementById('btn-export-png')?.addEventListener('click', () => {
+      this.graphView.exportPng();
+      this.showToast('📸 그래프 고해상도 이미지가 다운로드되었습니다.', 2000);
+    });
+
+    // 이웃 탐색 뎁스 (Depth 1, 2, 3)
+    document.querySelectorAll('.btn-depth').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.btn-depth').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const depth = btn.dataset.depth;
+        this.graphView.setDepth(depth);
+        this.showToast(`이웃 탐색 뎁스: ${depth}단계 적용`, 1500);
+      });
+    });
+
+    // 시간 여행 타임랩스 토글 & 제어
+    const timelinePlayer = document.getElementById('timeline-player');
+    const btnTimelinePlay = document.getElementById('btn-timeline-play');
+    const sliderTimeline = document.getElementById('slider-timeline');
+    const labelTimelineDate = document.getElementById('timeline-date-label');
+    let timelineTimer = null;
+
+    document.getElementById('btn-toggle-timeline')?.addEventListener('click', () => {
+      timelinePlayer?.classList.toggle('hidden');
+    });
+    document.getElementById('btn-timeline-close')?.addEventListener('click', () => {
+      timelinePlayer?.classList.add('hidden');
+      if (timelineTimer) clearInterval(timelineTimer);
+      btnTimelinePlay.textContent = '▶';
+      this.graphView.setTimelineCutoff(null);
+    });
+
+    // 타임라인 재생/일시정지
+    btnTimelinePlay?.addEventListener('click', () => {
+      if (timelineTimer) {
+        clearInterval(timelineTimer);
+        timelineTimer = null;
+        btnTimelinePlay.textContent = '▶';
+      } else {
+        btnTimelinePlay.textContent = '⏸';
+        if (Number(sliderTimeline.value) >= 100) sliderTimeline.value = 0;
+
+        timelineTimer = setInterval(() => {
+          let val = Number(sliderTimeline.value) + 2;
+          if (val > 100) {
+            val = 100;
+            clearInterval(timelineTimer);
+            timelineTimer = null;
+            btnTimelinePlay.textContent = '▶';
+          }
+          sliderTimeline.value = val;
+          updateTimelineView(val);
+        }, 120);
+      }
+    });
+
+    const updateTimelineView = (percent) => {
+      if (!this.rawNodes.length) return;
+      const sortedTimestamps = this.rawNodes
+        .map(n => new Date(n.edited || 0).getTime())
+        .sort((a, b) => a - b);
+      const minTime = sortedTimestamps[0] || Date.now();
+      const maxTime = sortedTimestamps[sortedTimestamps.length - 1] || Date.now();
+
+      if (percent >= 100) {
+        labelTimelineDate.textContent = '전체 기간';
+        this.graphView.setTimelineCutoff(null);
+      } else {
+        const targetTime = minTime + (maxTime - minTime) * (percent / 100);
+        const d = new Date(targetTime);
+        labelTimelineDate.textContent = `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`;
+        this.graphView.setTimelineCutoff(targetTime);
+      }
+    };
+
+    sliderTimeline?.addEventListener('input', (e) => {
+      updateTimelineView(Number(e.target.value));
+    });
+
     // 뷰 컨트롤
     document.getElementById('btn-zoom-in')?.addEventListener('click', () => this.graphView.zoomIn());
     document.getElementById('btn-zoom-out')?.addEventListener('click', () => this.graphView.zoomOut());

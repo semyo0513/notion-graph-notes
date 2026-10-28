@@ -5,20 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Notion Graph Notes</title>
   <link rel="stylesheet" href="css/style.css">
+  <!-- 2D 및 3D Force Graph & 라이브러리 고정 버전 -->
   <script src="https://unpkg.com/force-graph@1.43.5/dist/force-graph.min.js"></script>
+  <script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.2/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/flexsearch@0.7.31/dist/flexsearch.bundle.min.js"></script>
 </head>
 <body>
   <div id="app">
-    <!-- 그래프 캔버스 -->
+    <!-- 그래프 캔버스 (2D / 3D) -->
     <div id="graph-container"></div>
 
     <!-- 상단 툴바 / 컨트롤 -->
     <nav class="top-nav">
       <div class="brand-section">
-        <button id="btn-toggle-explorer" class="btn-icon" title="노트 목록 탐색기 열기/닫기" style="margin-right:4px;">📂</button>
+        <button id="btn-toggle-explorer" class="btn-icon" title="노트 목록 탐색기 (📂)" style="margin-right:4px;">📂</button>
         <svg class="brand-icon" viewBox="0 0 24 24">
           <circle cx="6" cy="6" r="3" />
           <circle cx="18" cy="6" r="3" />
@@ -30,12 +32,13 @@
       </div>
 
       <div class="controls-section">
-        <!-- 검색창 (중앙 정렬 지원) -->
+        <!-- 검색창 (중앙 집중 정렬) -->
         <div class="search-box">
-          <input type="text" id="search-input" placeholder="검색 (중앙 집중 정렬)..." autocomplete="off">
+          <input type="text" id="search-input" placeholder="검색 (중앙 집중)..." autocomplete="off">
           <button id="search-clear" class="search-clear" title="검색 지우기">✕</button>
         </div>
 
+        <!-- 폴더 & 태그 필터 -->
         <select id="folder-filter" class="filter-select">
           <option value="">모든 폴더</option>
         </select>
@@ -44,18 +47,38 @@
           <option value="">모든 태그</option>
         </select>
 
-        <!-- 물리 & 애니메이션 설정 버튼 -->
-        <button id="btn-toggle-physics" class="btn-icon" title="물리 엔진 및 장력/파티클 설정">🎨</button>
+        <!-- 색상 테마 모드 셀렉트 -->
+        <select id="color-mode-select" class="filter-select" title="노드 색상 기준">
+          <option value="folder">🎨 폴더별 색상</option>
+          <option value="tag">🏷️ 태그별 색상</option>
+          <option value="heatmap">🔥 수정일 히트맵</option>
+          <option value="hub">⭐ 지식 허브 (연결수)</option>
+        </select>
+
+        <!-- 3D / 2D 우주 모드 전환 버튼 -->
+        <button id="btn-toggle-3d" class="btn-icon" title="3D 우주 은하 모드 전환">🌐</button>
+
+        <!-- 고아 노트(Orphan) 발굴 필터 -->
+        <button id="btn-orphan-filter" class="btn-icon" title="고아 노트(외로운 노트)만 보기">🔍</button>
+
+        <!-- 타임라인 시간여행 토글 -->
+        <button id="btn-toggle-timeline" class="btn-icon" title="시간 여행 타임랩스 열기/닫기">⏳</button>
+
+        <!-- 고해상도 PNG 캡처 내보내기 -->
+        <button id="btn-export-png" class="btn-icon" title="고해상도 이미지 내보내기 (PNG)">📸</button>
+
+        <!-- 물리 엔진 제어 패널 버튼 -->
+        <button id="btn-toggle-physics" class="btn-icon" title="물리 엔진 장력/파티클 설정">🎨</button>
 
         <!-- Gemini AI 설정 버튼 -->
         <button id="btn-gemini-settings" class="btn-icon" title="Gemini AI 지식 비서 설정">🤖</button>
 
-        <!-- 줌/리셋 컨트롤 -->
+        <!-- 줌 컨트롤 -->
         <button id="btn-zoom-in" class="btn-icon" title="확대">+</button>
         <button id="btn-zoom-out" class="btn-icon" title="축소">−</button>
         <button id="btn-reset-view" class="btn-icon" title="화면 중앙 맞춤">⊙</button>
 
-        <!-- 잠금 -->
+        <!-- 잠금(로그아웃) -->
         <button id="btn-lock" class="btn-icon" title="다시 잠그기 (로그아웃)">🔒</button>
       </div>
     </nav>
@@ -80,13 +103,21 @@
       <div class="explorer-list"></div>
     </aside>
 
-    <!-- 물리 제어 & 애니메이션 팝업 패널 -->
+    <!-- 물리 제어 & 애니메이션 & 뎁스 팝업 패널 -->
     <div id="physics-panel" class="physics-panel hidden">
       <div class="physics-header">
-        <h4 style="font-size:13px; font-weight:700;">그래프 물리 & 애니메이션</h4>
+        <h4 style="font-size:13px; font-weight:700;">그래프 물리 & 탐색 뎁스</h4>
         <button id="physics-close" class="modal-close-btn" style="font-size:16px;">✕</button>
       </div>
       <div class="physics-body">
+        <div class="physics-row">
+          <label>이웃 탐색 뎁스 (Local Depth):</label>
+          <div class="depth-buttons">
+            <button class="btn-depth active" data-depth="1">1단계 (직접)</button>
+            <button class="btn-depth" data-depth="2">2단계 (친구의친구)</button>
+            <button class="btn-depth" data-depth="3">3단계 (확장)</button>
+          </div>
+        </div>
         <div class="physics-row">
           <label>연결선 장력 (거리): <span id="val-link-dist">60</span>px</label>
           <input type="range" id="slider-link-dist" min="20" max="200" value="60">
@@ -101,7 +132,7 @@
         </div>
         <div class="physics-row">
           <label>노드 크기 배율: <span id="val-node-size">1x</span></label>
-          <input type="range" id="slider-node-size" min="0.5" max="2.5" step="0.1" value="1.0">
+          <input type="range" id="slider-node-size" min="0.5" max="2.0" step="0.1" value="1.0">
         </div>
         <div class="physics-row" style="margin-top:6px;">
           <label class="remember-checkbox">
@@ -112,13 +143,23 @@
       </div>
     </div>
 
+    <!-- 하단 시간 여행 타임랩스 플레이어 바 -->
+    <div id="timeline-player" class="timeline-player hidden">
+      <button id="btn-timeline-play" class="btn-timeline-ctrl" title="타임랩스 재생/일시정지">▶</button>
+      <div class="timeline-slider-box">
+        <input type="range" id="slider-timeline" min="0" max="100" value="100">
+      </div>
+      <div id="timeline-date-label" class="timeline-date-label">전체 기간</div>
+      <button id="btn-timeline-close" class="modal-close-btn" style="font-size:14px; margin-left:6px;" title="닫기">✕</button>
+    </div>
+
     <!-- 좌측 하단 정보 HUD -->
     <div class="graph-hud">
       <div class="hud-item">연결선: <strong id="edge-count">0</strong></div>
       <div class="hud-item">동기화: <strong id="last-sync-time">-</strong></div>
     </div>
 
-    <!-- 우측 슬라이딩 사이드바 (노트 본문 + AI 챗봇 탭) -->
+    <!-- 우측 슬라이딩 사이드바 (노트 열람 + AI 비서) -->
     <aside id="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-title-area">
@@ -128,18 +169,13 @@
         <button class="sidebar-close" title="닫기 (ESC)">✕</button>
       </div>
 
-      <!-- 탭 바 -->
       <div class="sidebar-tabs">
         <button id="tab-btn-note" class="sidebar-tab active">📄 노트 본문</button>
         <button id="tab-btn-ai" class="sidebar-tab">🤖 Gemini AI 지식 비서</button>
       </div>
 
-      <!-- 노트 본문 뷰 -->
-      <div id="sidebar-view-note" class="sidebar-body">
-        <!-- 마크다운 렌더링 영역 -->
-      </div>
+      <div id="sidebar-view-note" class="sidebar-body"></div>
 
-      <!-- Gemini AI 대화 뷰 -->
       <div id="sidebar-view-ai" class="sidebar-ai-body hidden">
         <div id="ai-messages" class="ai-messages">
           <div class="ai-chat-bubble assistant">
@@ -225,10 +261,9 @@
       </div>
     </div>
 
-    <!-- 토스트 메시지 컨테이너 -->
     <div id="toast-container" class="toast-container"></div>
   </div>
 
-  <script type="module" src="js/app.js?v=20261028_4"></script>
+  <script type="module" src="js/app.js?v=20261028_5"></script>
 </body>
 </html>

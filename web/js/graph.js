@@ -1,3 +1,6 @@
+// 하이브리드 2D & 3D 지식 그래프 엔진
+// (3D 우주 은하 모드, 뎁스 확장, 히트맵/허브 컬러 모드, 타임랩스, 고해상도 캡처 지원)
+
 export class GraphView {
   constructor({ containerId, onNodeClick, onBackgroundClick }) {
     this.container = document.getElementById(containerId);
@@ -5,6 +8,9 @@ export class GraphView {
     this.onBackgroundClick = onBackgroundClick;
 
     this.graphInstance = null;
+    this.mode3D = false; // false = 2D, true = 3D
+    this.rawNodes = [];
+    this.rawEdges = [];
     this.nodes = [];
     this.links = [];
     this.nodeMap = new Map();
@@ -16,7 +22,13 @@ export class GraphView {
     this.highlightLinks = new Set();
     this.filterMatchIds = null;
 
-    // 물리 및 애니메이션 파라미터 기본값
+    // 고급 기능 옵션
+    this.colorMode = 'folder'; // folder, tag, heatmap, hub
+    this.filterDepth = 0; // 0 = 전체, 1 = 1단계, 2 = 2단계, 3 = 3단계
+    this.showOrphansOnly = false;
+    this.timelineCutoff = null; // 타임랩스용 특정 시점
+
+    // 물리 및 애니메이션 파라미터
     this.params = {
       chargeStrength: -160,
       linkDistance: 60,
@@ -25,8 +37,8 @@ export class GraphView {
       particlesEnabled: true
     };
 
-    // 폴더별 고유 컬러 팔레트
-    this.folderColors = new Map();
+    // 폴더 및 태그 컬러 팔레트
+    this.colorMap = new Map();
     this.colorPalette = [
       '#a855f7', '#3b82f6', '#10b981', '#f59e0b',
       '#ec4899', '#06b6d4', '#84cc16', '#8b5cf6',
@@ -36,33 +48,100 @@ export class GraphView {
 
   calcNodeRadius(node) {
     const neighborsCount = node.neighbors ? node.neighbors.size : 0;
-    // 제곱근 기반 부드러운 완충 스케일링 (극단적인 크기 불균형 원천 차단)
-    // 0개 연결: 기본 4.2px, 수십 개 연결: 최대 9.5px
+    // 제곱근 완충 스케일링: 최소 4.2px, 최대 9.5px
     const scaledIncrement = Math.min(5.5, Math.sqrt(neighborsCount) * 1.1);
     const baseRadius = 4.2 + scaledIncrement;
     return baseRadius * (this.params.nodeSizeScale || 1.0);
   }
 
-  getFolderColor(folder) {
-    const key = folder || '기본';
-    if (!this.folderColors.has(key)) {
-      const idx = this.folderColors.size % this.colorPalette.length;
-      this.folderColors.set(key, this.colorPalette[idx]);
+  getColor(node) {
+    // 1. 고아 노드 강조 모드
+    if (this.showOrphansOnly) {
+      const isOrphan = !node.neighbors || node.neighbors.size === 0;
+      return isOrphan ? '#ef4444' : 'rgba(75, 85, 99, 0.2)';
     }
-    return this.folderColors.get(key);
+
+    // 2. 수정일 히트맵 모드 (최신: 오렌지/핑크, 오래됨: 차가운 블루)
+    if (this.colorMode === 'heatmap') {
+      const edited = new Date(node.edited || 0).getTime();
+      const now = Date.now();
+      const diffDays = Math.max(0, (now - edited) / (1000 * 60 * 60 * 24));
+      if (diffDays <= 3) return '#f43f5e'; // 3일 이내 최신: 네온 핑크
+      if (diffDays <= 14) return '#fb923c'; // 2주 이내: 따뜻한 오렌지
+      if (diffDays <= 30) return '#a855f7'; // 1달 이내: 퍼플
+      if (diffDays <= 90) return '#3b82f6'; // 3달 이내: 블루
+      return '#64748b'; // 3달 이상: 쿨 그레이
+    }
+
+    // 3. 지식 허브 모드 (연결 중심성)
+    if (this.colorMode === 'hub') {
+      const count = node.neighbors ? node.neighbors.size : 0;
+      if (count >= 5) return '#fbbf24'; // 초거대 허브: 눈부신 골드
+      if (count >= 3) return '#a855f7'; // 중간 허브: 퍼플
+      if (count >= 1) return '#38bdf8'; // 일반 노드: 하늘색
+      return '#6b7280'; // 고아 노드: 어두운 회색
+    }
+
+    // 4. 태그별 색상 모드
+    if (this.colorMode === 'tag') {
+      const tag = (node.tags && node.tags.length > 0) ? node.tags[0] : '태그없음';
+      if (!this.colorMap.has('tag_' + tag)) {
+        const idx = this.colorMap.size % this.colorPalette.length;
+        this.colorMap.set('tag_' + tag, this.colorPalette[idx]);
+      }
+      return this.colorMap.get('tag_' + tag);
+    }
+
+    // 5. 기본 폴더별 색상 모드
+    const folder = node.folder || '기본';
+    if (!this.colorMap.has('folder_' + folder)) {
+      const idx = this.colorMap.size % this.colorPalette.length;
+      this.colorMap.set('folder_' + folder, this.colorPalette[idx]);
+    }
+    return this.colorMap.get('folder_' + folder);
   }
 
   init(data) {
-    this.nodes = (data.nodes || []).map(n => ({ ...n }));
-    let rawEdges = data.edges || [];
+    this.rawNodes = data.nodes || [];
+    this.rawEdges = data.edges || [];
 
-    // 만약 엣지가 0개라면 클라이언트에서 태그/폴더 기반 연결선 자동 생성 보강
-    if (rawEdges.length === 0 && this.nodes.length > 1) {
-      console.log('• 연결선이 없어 클라이언트 측 지식 연결망을 자동 생성합니다.');
-      rawEdges = this.generateFallbackEdges(this.nodes);
+    // 만약 엣지가 0개라면 클라이언트 측 지식 연결망 보강
+    if (this.rawEdges.length === 0 && this.rawNodes.length > 1) {
+      this.rawEdges = this.generateFallbackEdges(this.rawNodes);
     }
 
-    this.links = rawEdges.map(([source, target]) => ({ source, target }));
+    this.rebuildGraphData();
+    this.render();
+  }
+
+  generateFallbackEdges(nodes) {
+    const edges = [];
+    const seen = new Set();
+    const add = (a, b) => {
+      if (a === b) return;
+      const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        edges.push([a, b]);
+      }
+    };
+
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        if (a.tags && b.tags && a.tags.some(t => b.tags.includes(t))) {
+          add(a.id, b.id);
+        } else if (a.folder && b.folder && a.folder === b.folder && a.folder !== '기본') {
+          add(a.id, b.id);
+        }
+      }
+    }
+    return edges;
+  }
+
+  rebuildGraphData() {
+    this.nodes = this.rawNodes.map(n => ({ ...n }));
+    this.links = this.rawEdges.map(([source, target]) => ({ source, target }));
 
     this.nodeMap.clear();
     for (const n of this.nodes) {
@@ -81,7 +160,21 @@ export class GraphView {
         b.links.add(l);
       }
     }
+  }
 
+  render() {
+    // 기존 인스턴스 정리
+    this.container.innerHTML = '';
+
+    if (this.mode3D) {
+      this.render3D();
+    } else {
+      this.render2D();
+    }
+  }
+
+  /* ───── 2D 평면 렌더링 ───── */
+  render2D() {
     if (typeof window.ForceGraph === 'undefined') return;
 
     this.graphInstance = window.ForceGraph()(this.container)
@@ -99,14 +192,18 @@ export class GraphView {
         if (this.highlightLinks.size > 0) {
           return this.highlightLinks.has(link) ? 'rgba(168, 85, 247, 0.95)' : 'rgba(46, 51, 66, 0.12)';
         }
-        return 'rgba(99, 102, 241, 0.45)'; // 세련된 퍼플블루 엣지
+        return 'rgba(99, 102, 241, 0.45)';
       })
-      // 연결선 파티클 흐름 애니메이션
       .linkDirectionalParticles(link => (this.params.particlesEnabled ? (this.highlightLinks.has(link) ? 4 : 2) : 0))
       .linkDirectionalParticleSpeed(0.007)
       .linkDirectionalParticleWidth(link => (this.highlightLinks.has(link) ? 3 : 1.8))
       .linkDirectionalParticleColor(() => '#a855f7')
       .nodeCanvasObject((node, ctx, globalScale) => {
+        // 타임라인 컷오프 이전 노드만 가시화
+        if (this.timelineCutoff && new Date(node.edited || 0).getTime() > this.timelineCutoff) {
+          return;
+        }
+
         const isSelected = this.selectedNode === node;
         const isHovered = this.hoverNode === node;
         const isHighlighted = this.highlightNodes.has(node);
@@ -119,9 +216,8 @@ export class GraphView {
         }
 
         const size = this.calcNodeRadius(node);
-        const color = this.getFolderColor(node.folder);
+        const color = this.getColor(node);
 
-        // 글로우 효과 (하이라이트된 노드)
         if ((isSelected || isHovered) && !isDimmed) {
           ctx.beginPath();
           ctx.arc(node.x, node.y, size + 4, 0, 2 * Math.PI, false);
@@ -129,17 +225,9 @@ export class GraphView {
           ctx.fill();
         }
 
-        // 노드 원 그리기
         ctx.beginPath();
         ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
-
-        if (isDimmed) {
-          ctx.fillStyle = 'rgba(75, 85, 99, 0.15)';
-        } else if (isSelected || isHovered) {
-          ctx.fillStyle = '#ffffff';
-        } else {
-          ctx.fillStyle = color;
-        }
+        ctx.fillStyle = isDimmed ? 'rgba(75, 85, 99, 0.15)' : ((isSelected || isHovered) ? '#ffffff' : color);
         ctx.fill();
 
         if ((isSelected || isHovered) && !isDimmed) {
@@ -148,15 +236,13 @@ export class GraphView {
           ctx.stroke();
         }
 
-        // 라벨 렌더링
         const showLabel = !isDimmed && (globalScale > 1.2 || isSelected || isHovered || isHighlighted || size > 6);
         if (showLabel) {
           const label = node.title || '';
           const fontSize = Math.max(10 / globalScale, 3);
-          ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+          ctx.font = `${fontSize}px -apple-system, sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
-
           ctx.fillStyle = isDimmed ? 'rgba(156, 163, 175, 0.2)' : (isSelected ? '#a855f7' : '#e5e7eb');
           ctx.fillText(label, node.x, node.y + size + 2);
         }
@@ -181,45 +267,58 @@ export class GraphView {
         if (this.onBackgroundClick) this.onBackgroundClick();
       });
 
-    // 물리 엔진 초기 파라미터 적용
     this.updatePhysics();
-
-    window.addEventListener('resize', () => {
-      if (this.graphInstance) {
-        this.graphInstance.width(this.container.clientWidth);
-        this.graphInstance.height(this.container.clientHeight);
-      }
-    });
   }
 
-  generateFallbackEdges(nodes) {
-    const edges = [];
-    const seen = new Set();
-    const add = (a, b) => {
-      if (a === b) return;
-      const key = a < b ? `${a}|${b}` : `${b}|${a}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        edges.push([a, b]);
-      }
-    };
-
-    // 공통 태그 또는 공통 폴더
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const a = nodes[i], b = nodes[j];
-        if (a.tags && b.tags && a.tags.some(t => b.tags.includes(t))) {
-          add(a.id, b.id);
-        } else if (a.folder && b.folder && a.folder === b.folder && a.folder !== '기본') {
-          add(a.id, b.id);
-        }
-      }
+  /* ───── 3D 우주 은하 모드 렌더링 ───── */
+  render3D() {
+    if (typeof window.ForceGraph3D === 'undefined') {
+      console.warn('3D Force Graph 라이브러리가 로드되지 않았습니다.');
+      return;
     }
-    return edges;
+
+    this.graphInstance = window.ForceGraph3D()(this.container)
+      .graphData({ nodes: this.nodes, links: this.links })
+      .backgroundColor('#0d0e12')
+      .nodeId('id')
+      .nodeLabel(n => `${n.title} (${n.folder || '기본'})`)
+      .nodeVal(n => this.calcNodeRadius(n))
+      .nodeColor(n => this.getColor(n))
+      .linkWidth(link => (this.highlightLinks.has(link) ? 3 : 1))
+      .linkColor(() => 'rgba(99, 102, 241, 0.5)')
+      .linkDirectionalParticles(this.params.particlesEnabled ? 3 : 0)
+      .linkDirectionalParticleSpeed(0.008)
+      .linkDirectionalParticleWidth(2)
+      .linkDirectionalParticleColor(() => '#a855f7')
+      .onNodeClick(node => {
+        this.selectNode(node);
+        if (this.onNodeClick) this.onNodeClick(node);
+      })
+      .onBackgroundClick(() => {
+        this.clearSelection();
+        if (this.onBackgroundClick) this.onBackgroundClick();
+      });
+
+    // 3D 카메라 천천히 공전(Orbit) 애니메이션
+    const distance = 400;
+    let angle = 0;
+    const interval = setInterval(() => {
+      if (!this.mode3D || this.selectedNode) return;
+      angle += Math.PI / 1200;
+      this.graphInstance.cameraPosition({
+        x: distance * Math.sin(angle),
+        z: distance * Math.cos(angle)
+      });
+    }, 40);
+  }
+
+  toggle3D() {
+    this.mode3D = !this.mode3D;
+    this.render();
   }
 
   updatePhysics() {
-    if (!this.graphInstance) return;
+    if (!this.graphInstance || this.mode3D) return;
     const charge = this.graphInstance.d3Force('charge');
     if (charge) charge.strength(this.params.chargeStrength);
 
@@ -235,12 +334,51 @@ export class GraphView {
   setParam(name, value) {
     this.params[name] = value;
     if (name === 'particlesEnabled' && this.graphInstance) {
-      this.graphInstance.linkDirectionalParticles(this.graphInstance.linkDirectionalParticles());
+      if (!this.mode3D) {
+        this.graphInstance.linkDirectionalParticles(this.graphInstance.linkDirectionalParticles());
+      }
     } else {
       this.updatePhysics();
     }
   }
 
+  setColorMode(mode) {
+    this.colorMode = mode;
+    if (this.graphInstance) {
+      if (this.mode3D) {
+        this.graphInstance.nodeColor(n => this.getColor(n));
+      } else {
+        this.graphInstance.nodeColor(this.graphInstance.nodeColor());
+      }
+    }
+  }
+
+  setDepth(depth) {
+    this.filterDepth = Number(depth);
+    if (this.selectedNode) {
+      this.selectNode(this.selectedNode);
+    }
+  }
+
+  toggleOrphansOnly() {
+    this.showOrphansOnly = !this.showOrphansOnly;
+    if (this.graphInstance) {
+      if (!this.mode3D) {
+        this.graphInstance.nodeColor(this.graphInstance.nodeColor());
+      } else {
+        this.graphInstance.nodeColor(n => this.getColor(n));
+      }
+    }
+  }
+
+  setTimelineCutoff(timestamp) {
+    this.timelineCutoff = timestamp;
+    if (this.graphInstance && !this.mode3D) {
+      this.graphInstance.nodeColor(this.graphInstance.nodeColor());
+    }
+  }
+
+  /* ───── N단계 뎁스(Depth) 이웃 확장 계산 ───── */
   selectNode(node) {
     this.selectedNode = node;
     this.highlightNodes.clear();
@@ -248,15 +386,47 @@ export class GraphView {
 
     if (node) {
       this.highlightNodes.add(node);
-      if (node.neighbors) {
-        node.neighbors.forEach(neighbor => this.highlightNodes.add(neighbor));
-      }
-      if (node.links) {
-        node.links.forEach(link => this.highlightLinks.add(link));
+
+      // 뎁스 1단계: 직접 연결된 이웃
+      const currentLevel = new Set(node.neighbors || []);
+      currentLevel.forEach(n => this.highlightNodes.add(n));
+      (node.links || []).forEach(l => this.highlightLinks.add(l));
+
+      // 뎁스 2단계 이상 확장
+      const maxDepth = this.filterDepth > 0 ? this.filterDepth : 1;
+      let lastVisited = new Set(currentLevel);
+
+      for (let d = 2; d <= maxDepth; d++) {
+        const nextLevel = new Set();
+        for (const n of lastVisited) {
+          if (n.neighbors) {
+            for (const neighbor of n.neighbors) {
+              if (!this.highlightNodes.has(neighbor)) {
+                this.highlightNodes.add(neighbor);
+                nextLevel.add(neighbor);
+              }
+            }
+          }
+          if (n.links) {
+            n.links.forEach(l => this.highlightLinks.add(l));
+          }
+        }
+        lastVisited = nextLevel;
       }
 
-      this.graphInstance.centerAt(node.x, node.y, 800);
-      this.graphInstance.zoom(2.2, 800);
+      // 카메라 부드러운 패닝
+      if (!this.mode3D) {
+        this.graphInstance.centerAt(node.x, node.y, 800);
+        this.graphInstance.zoom(2.2, 800);
+      } else {
+        const distance = 120;
+        const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+        this.graphInstance.cameraPosition(
+          { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+          node,
+          1500
+        );
+      }
     }
   }
 
@@ -274,21 +444,13 @@ export class GraphView {
     this.highlightLinks.clear();
   }
 
-  /**
-   * 검색어 필터링 시: 검색된 노드들을 중앙으로 모으고 화면 맞춤
-   */
   applyFilter(matchedIdsSet) {
     this.filterMatchIds = matchedIdsSet;
-
-    if (this.graphInstance) {
-      // 캔버스 재렌더링 트리거
+    if (this.graphInstance && !this.mode3D) {
       this.graphInstance.nodeColor(this.graphInstance.nodeColor());
 
       if (matchedIdsSet && matchedIdsSet.size > 0) {
-        // 검색된 노드들이 있으면 부드럽게 화면 중앙으로 집중 줌 인
         this.graphInstance.zoomToFit(800, 70, node => matchedIdsSet.has(node.id));
-
-        // 검색된 노드들에게 중앙 중력을 강하게 부여하여 모이게 함
         const matchedNodes = this.nodes.filter(n => matchedIdsSet.has(n.id));
         for (const n of matchedNodes) {
           n.vx = (n.vx || 0) * 0.5 - (n.x || 0) * 0.05;
@@ -299,16 +461,31 @@ export class GraphView {
     }
   }
 
+  /**
+   * 고해상도 이미지 내보내기 (Export PNG)
+   */
+  exportPng() {
+    const canvas = this.container.querySelector('canvas');
+    if (!canvas) return;
+    const link = document.createElement('a');
+    link.download = `notion-knowledge-graph-${Date.now()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }
+
   zoomIn() {
-    if (this.graphInstance) this.graphInstance.zoom(this.graphInstance.zoom() * 1.4, 400);
+    if (this.graphInstance && !this.mode3D) this.graphInstance.zoom(this.graphInstance.zoom() * 1.4, 400);
   }
 
   zoomOut() {
-    if (this.graphInstance) this.graphInstance.zoom(this.graphInstance.zoom() / 1.4, 400);
+    if (this.graphInstance && !this.mode3D) this.graphInstance.zoom(this.graphInstance.zoom() / 1.4, 400);
   }
 
   resetView() {
     this.clearSelection();
-    if (this.graphInstance) this.graphInstance.zoomToFit(800, 50);
+    if (this.graphInstance) {
+      if (!this.mode3D) this.graphInstance.zoomToFit(800, 50);
+      else this.graphInstance.cameraPosition({ x: 0, y: 0, z: 450 }, { x: 0, y: 0, z: 0 }, 1000);
+    }
   }
 }
