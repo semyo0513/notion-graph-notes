@@ -65,16 +65,16 @@ export class NotionClient {
     }
 
     // 일반 프록시 도메인인 경우 (예: https://notion-proxy.xxx.workers.dev)
-    // 1순위: ?url= 쿼리 전달 형태
-    // 2순위: /v1/... 직접 리버스 프록시 형태
+    // 1순위: /v1/... 직접 리버스 프록시 형태 (많은 Notion Worker의 표준)
+    // 2순위: ?url= 쿼리 전달 형태
     return [
-      `${proxy}/?url=${encodeURIComponent(targetUrl)}`,
-      `${proxy}${apiPath}`
+      `${proxy}${apiPath}`,
+      `${proxy}/?url=${encodeURIComponent(targetUrl)}`
     ];
   }
 
   /**
-   * 노션 API 호출 (스마트 프록시 듀얼 시도 & Retry-After 대응)
+   * 노션 API 호출 (스마트 프록시 듀얼 시도 & HTML 감지 & Retry-After 대응)
    */
   async request(method, apiPath, body = null) {
     const candidateUrls = this.getCandidateUrls(apiPath);
@@ -109,8 +109,20 @@ export class NotionClient {
           continue;
         }
 
+        const text = await res.text().catch(() => '');
+
         if (res.ok) {
-          return res.json();
+          try {
+            return JSON.parse(text);
+          } catch (parseErr) {
+            // Notion API는 정상 시 반드시 JSON을 반환해야 함. HTML이 온 경우 다음 후보 시도
+            lastError = new Error(
+              `프록시 서버가 Notion JSON 대신 HTML 웹페이지를 반환했습니다.\n` +
+              `• 시도 주소: ${url}\n` +
+              `• 응답 내용: ${text.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').slice(0, 100)}...`
+            );
+            break; // 다음 URL 후보 시도
+          }
         }
 
         // 404가 나오면 리버스 프록시 형태일 수 있으므로 다음 URL 후보 시도
@@ -118,12 +130,12 @@ export class NotionClient {
           break;
         }
 
-        let errMsg = '';
+        let errMsg = text;
         try {
-          const errJson = await res.json();
+          const errJson = JSON.parse(text);
           errMsg = errJson.message || res.statusText;
         } catch {
-          errMsg = await res.text().catch(() => res.statusText);
+          errMsg = text.slice(0, 100) || res.statusText;
         }
 
         if (res.status === 401) {
