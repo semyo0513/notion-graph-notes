@@ -1,4 +1,5 @@
-// Notion API 직접 호출 → 정적 데이터 암호화 생성기 (Node 22 내장 fetch/crypto/zlib)
+// Notion API 최신 규격 (2025-09-03 / 2026-03-11 대응)
+// 페이지 ID가 들어와도 자식 DB 자동 탐색 & Database ID로부터 Data Source ID 자동 해석
 import { webcrypto as crypto } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import fs from 'node:fs/promises';
@@ -7,18 +8,14 @@ const { NOTION_TOKEN, DATA_SOURCE_ID, DATA_PASSPHRASE } = process.env;
 
 console.log('=== [1/4] GitHub Secrets 환경변수 확인 ===');
 console.log(`• NOTION_TOKEN: ${NOTION_TOKEN ? '설정됨 (길이: ' + NOTION_TOKEN.length + '자)' : '❌ 누락됨!'}`);
-console.log(`• DATA_SOURCE_ID: ${DATA_SOURCE_ID ? '설정됨 (입력값: ' + DATA_SOURCE_ID + ')' : '❌ 누락됨!'}`);
+console.log(`• DATA_SOURCE_ID: ${DATA_SOURCE_ID ? '설정됨' : '❌ 누락됨!'}`);
 console.log(`• DATA_PASSPHRASE: ${DATA_PASSPHRASE ? '설정됨' : '❌ 누락됨!'}`);
 
 if (!NOTION_TOKEN || !DATA_SOURCE_ID || !DATA_PASSPHRASE) {
   console.error('\n[치명적 오류] GitHub Secrets에 3가지 값이 모두 등록되어 있어야 합니다.');
-  console.error('Settings -> Secrets and variables -> Actions 에서 NOTION_TOKEN, DATA_SOURCE_ID, DATA_PASSPHRASE 를 확인하세요.');
   process.exit(1);
 }
 
-/**
- * URL 전체가 들어와도 32자리 고유 ID(UUID)를 자동 추출
- */
 function extractNotionId(input) {
   if (!input) return '';
   const str = String(input).trim();
@@ -36,8 +33,9 @@ function extractNotionId(input) {
   return str.replace(/[^a-zA-Z0-9_-]/g, '');
 }
 
-const CLEAN_DB_ID = extractNotionId(DATA_SOURCE_ID);
-console.log(`• 추출된 최종 Database ID: ${CLEAN_DB_ID}\n`);
+const RAW_ID = extractNotionId(DATA_SOURCE_ID);
+console.log(`• 추출된 초기 ID: ${RAW_ID}\n`);
+
 const NOTION = 'https://api.notion.com/v1';
 const NOTION_VERSION = '2026-03-11';
 const OUT = 'dist/data';
@@ -48,7 +46,7 @@ const b64 = u8 => Buffer.from(u8).toString('base64');
 const unb64 = s => new Uint8Array(Buffer.from(s, 'base64'));
 const exists = p => fs.access(p).then(() => true, () => false);
 
-/* ───── Notion API 직접 호출 (서버 환경 = CORS 없음) ───── */
+/* ───── Notion API 직접 호출 ───── */
 async function notion(method, path, body) {
   for (let i = 0; i < 5; i++) {
     const res = await fetch(NOTION + path, {
@@ -70,33 +68,104 @@ async function notion(method, path, body) {
     if (res.ok) return res.json();
 
     const errText = await res.text().catch(() => '');
-    let errCode = '';
     let errMsg = errText;
     try {
       const errJson = JSON.parse(errText);
-      errCode = errJson.code || '';
       errMsg = errJson.message || errText;
     } catch {}
 
-    if (res.status === 404) {
-      throw new Error(
-        `Notion API 404 오류: 데이터베이스 ID(${CLEAN_DB_ID})를 찾을 수 없습니다.\n` +
-        `Notion 응답 메시지: [${errCode}] ${errMsg}\n\n` +
-        `[해결 체크리스트]\n` +
-        `1. 노션 DB 페이지 우측 상단 [···] -> [연결(Connections)]에 생성하신 통합 봇을 반드시 추가했는지 확인하세요.\n` +
-        `2. 만약 입력하신 주소가 일반 페이지 주소라면, 데이터베이스 자체의 [링크 복사]를 눌러 데이터베이스 ID를 넣어주세요.`
-      );
-    }
-    if (res.status === 401) {
-      throw new Error(`Notion API 401 인증 실패: 토큰이 올바르지 않습니다. (응답: ${errMsg})`);
-    }
-
-    throw new Error(`Notion API [${res.status}] ${method} ${path.split('?')[0]}: ${errMsg}`);
+    const err = new Error(`Notion API [${res.status}] ${method} ${path.split('?')[0]}: ${errMsg}`);
+    err.status = res.status;
+    err.details = errMsg;
+    throw err;
   }
   throw new Error('Notion API 요청 실패 (최대 재시도 초과)');
 }
 
-/* ───── 암호화 (브라우저 crypto.js와 동일 규격) ───── */
+/* ───── 실제 쿼리할 Data Source ID 자동 해석 ───── */
+async function resolveDataSourceId(initialId) {
+  console.log(`=== [2/4] Notion 엔티티 타입 분석: ${initialId} ===`);
+
+  // 1. Data Source ID로 바로 쿼리 가능한지 시도
+  try {
+    console.log(`• 1차 시도: data_sources/${initialId}/query 테스트...`);
+    await notion('POST', `/data_sources/${initialId}/query`, { page_size: 1 });
+    console.log(`✓ 확인 완료: ${initialId} 는 유효한 Data Source ID입니다.\n`);
+    return initialId;
+  } catch (err) {
+    console.log(`  (data_sources 쿼리 불가: ${err.details || err.message})`);
+  }
+
+  // 2. Database 객체인지 확인 (GET /databases/:id)
+  try {
+    console.log(`• 2차 시도: databases/${initialId} 메타데이터 조회...`);
+    const dbObj = await notion('GET', `/databases/${initialId}`);
+    console.log(`✓ Database 발견! 제목: ${dbObj.title?.map(t => t.plain_text).join('') || '제목 없음'}`);
+
+    // 최신 API 규격: databases 객체 내의 data_sources 목록 확인
+    if (Array.isArray(dbObj.data_sources) && dbObj.data_sources.length > 0) {
+      const dsId = dbObj.data_sources[0].id;
+      console.log(`✓ Database 내부의 Data Source ID 발견: ${dsId}\n`);
+      return dsId;
+    }
+    // 이전 API 규격 DB라면 ID 그대로 반환
+    return initialId;
+  } catch (err) {
+    console.log(`  (databases 조회 불가: ${err.details || err.message})`);
+  }
+
+  // 3. Page 객체인지 확인 (GET /pages/:id) -> 페이지 안의 자식 DB 탐색
+  try {
+    console.log(`• 3차 시도: pages/${initialId} 조회 (페이지 내 인라인 DB 탐색)...`);
+    const pageObj = await notion('GET', `/pages/${initialId}`);
+    console.log(`✓ 입력된 ID는 페이지(Page)입니다. 페이지 내의 데이터베이스 블록을 탐색합니다...`);
+
+    const blocks = await notion('GET', `/blocks/${initialId}/children?page_size=100`);
+    for (const b of blocks.results || []) {
+      if (b.type === 'child_database') {
+        const childDbId = b.id.replace(/-/g, '');
+        console.log(`✓ 페이지 내에서 자식 데이터베이스 발견! [${b.child_database?.title}] (ID: ${childDbId})`);
+        return await resolveDataSourceId(childDbId);
+      }
+    }
+    throw new Error('이 페이지 안에서 child_database(데이터베이스)를 찾을 수 없습니다.');
+  } catch (err) {
+    console.log(`  (pages 조회 불가: ${err.details || err.message})`);
+  }
+
+  // 4. 검색 API로 통합 봇이 접근 가능한 모든 DB 목록 출력 및 매칭 시도
+  console.log(`• 4차 시도: 통합 봇이 접근 가능한 데이터베이스 전체 검색...`);
+  try {
+    const searchRes = await notion('POST', '/search', {
+      filter: { value: 'database', property: 'object' },
+      page_size: 10
+    });
+
+    if (searchRes.results && searchRes.results.length > 0) {
+      console.log(`✓ 접근 가능한 데이터베이스 목록 (${searchRes.results.length}개 발견):`);
+      for (const d of searchRes.results) {
+        const dTitle = d.title?.map(t => t.plain_text).join('') || '(제목 없음)';
+        const cleanId = d.id.replace(/-/g, '');
+        console.log(`  - [${dTitle}] ID: ${cleanId}`);
+      }
+      const firstDb = searchRes.results[0];
+      const targetDbId = firstDb.id.replace(/-/g, '');
+      console.log(`\n➔ 첫 번째 데이터베이스 [${firstDb.title?.map(t => t.plain_text).join('')}] ID(${targetDbId})로 자동 연결합니다.\n`);
+      return await resolveDataSourceId(targetDbId);
+    }
+  } catch (err) {
+    console.log(`  (검색 API 실패: ${err.message})`);
+  }
+
+  throw new Error(
+    `입력하신 ID(${initialId})에 해당하는 데이터베이스를 찾을 수 없습니다.\n` +
+    `[해결 방법]\n` +
+    `1. 노션 DB 페이지 우측 상단 [···] -> [연결(Connections)]에 생성하신 통합 봇을 반드시 추가해 주세요.\n` +
+    `2. 데이터베이스 제목 우측 [···] -> [데이터 소스 관리] -> [데이터 소스 ID 복사]를 눌러 그 값을 GitHub Secret에 넣어주세요.`
+  );
+}
+
+/* ───── 암호화 유틸 ───── */
 async function deriveKey(pass, salt) {
   const base = await crypto.subtle.importKey('raw', te.encode(pass), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
@@ -126,21 +195,16 @@ async function open(key, buf) {
 }
 
 /* ───── 노트 목록 쿼리 ───── */
-async function queryAll() {
+async function queryAll(targetId) {
   const nodes = [];
   let cursor = null;
 
-  // 1차: data_sources 쿼리 (2025-09-03 이후)
-  let endpoint = `/data_sources/${CLEAN_DB_ID}/query`;
+  // 1차 시도: data_sources 쿼리
+  let endpoint = `/data_sources/${targetId}/query`;
   try {
     await notion('POST', endpoint, { page_size: 1 });
   } catch (err) {
-    if (err.message.includes('404')) {
-      // 2차: databases 쿼리
-      endpoint = `/databases/${CLEAN_DB_ID}/query`;
-    } else {
-      throw err;
-    }
+    endpoint = `/databases/${targetId}/query`;
   }
 
   do {
@@ -249,10 +313,15 @@ async function fetchPageMarkdown(pageId) {
   }
 }
 
-/* ───── 메인 동기화 실행 ───── */
+/* ───── 메인 실행 ───── */
 async function main() {
   await fs.mkdir(`${OUT}/n`, { recursive: true });
 
+  // 1. 실제 Data Source ID 자동 해석
+  const targetId = await resolveDataSourceId(RAW_ID);
+
+  // 2. 암호화 키 생성 및 캐시 확인
+  console.log(`=== [3/4] 암호화 키 및 증분 캐시 검사 ===`);
   const prevMeta = await fs.readFile(`${OUT}/meta.json`, 'utf8').then(JSON.parse, () => null);
   const salt = prevMeta?.salt ? unb64(prevMeta.salt) : crypto.getRandomValues(new Uint8Array(16));
   const key = await deriveKey(DATA_PASSPHRASE, salt);
@@ -262,10 +331,15 @@ async function main() {
     const prevBuf = await fs.readFile(`${OUT}/graph.enc`);
     const prevGraph = JSON.parse(await open(key, prevBuf));
     prev = new Map(prevGraph.nodes.map(n => [n.id, n.edited]));
-  } catch {}
+    console.log(`• 이전 캐시 복호화 성공: ${prev.size}개 노트 캐시됨`);
+  } catch {
+    console.log(`• 신규 빌드 (전체 동기화)`);
+  }
 
-  console.log(`[시작] 데이터베이스 ID: ${CLEAN_DB_ID} 쿼리 중...`);
-  const nodes = await queryAll();
+  // 3. 전체 노트 조회
+  console.log(`\n=== [4/4] 노션 노트 및 본문 수집 시작 ===`);
+  const nodes = await queryAll(targetId);
+  console.log(`• 노션 전체 노트 수: ${nodes.length}개`);
 
   let fetched = 0;
   for (const n of nodes) {
@@ -312,10 +386,10 @@ async function main() {
     builtAt: new Date().toISOString()
   }));
 
-  console.log(`[완료] 노션 노트 총 ${nodes.length}개 동기화 / 본문 갱신: ${fetched}개`);
+  console.log(`\n🎉 [완료] 전체 노트 ${nodes.length}개 동기화 및 암호화 완료! (본문 신규/갱신: ${fetched}개)`);
 }
 
 main().catch(err => {
-  console.error(`동기화 실패: ${err.message}`);
+  console.error(`\n❌ [동기화 실패]: ${err.message}`);
   process.exit(1);
 });
