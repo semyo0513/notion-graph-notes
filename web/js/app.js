@@ -49,7 +49,10 @@ class App {
     // 1. 로컬 저장소에서 설정 불러오기
     const savedToken = localStorage.getItem('notion_token') || sessionStorage.getItem('notion_token') || '';
     const savedDbId = localStorage.getItem('notion_db_id') || sessionStorage.getItem('notion_db_id') || '';
-    const savedProxy = localStorage.getItem('notion_proxy') || 'https://corsproxy.io/?url=';
+    let savedProxy = localStorage.getItem('notion_proxy') || sessionStorage.getItem('notion_proxy') || '';
+    if (savedProxy.includes('corsproxy.io')) {
+      savedProxy = ''; // Authorization 헤더 차단되는 공용 프록시 제거
+    }
 
     this.tokenInput.value = savedToken;
     this.dbIdInput.value = savedDbId;

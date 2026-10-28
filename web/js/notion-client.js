@@ -48,37 +48,96 @@ export class NotionClient {
   }
 
   /**
-   * 프록시 형태에 맞춰 최적의 URL 자동 구성
+   * 프록시 형태(리버스 프록시 vs ?url= 쿼리 프록시)에 맞춰 가능한 URL 목록 반환
    */
-  buildUrl(apiPath) {
-    const targetUrl = NOTION_API + apiPath;
-    if (!this.proxyUrl) return targetUrl;
+  getCandidateUrls(apiPath) {
+    const targetUrl = NOTION_API + apiPath; // https://api.notion.com/v1/...
+    if (!this.proxyUrl) return [targetUrl];
 
-    const proxy = this.proxyUrl.trim();
+    const proxy = this.proxyUrl.trim().replace(/\/+$/, '');
 
-    // 1) 프록시 주소에 이미 ?url= 이나 쿼리 매개변수가 있는 경우
+    // 사용자가 이미 ?url= 이나 쿼리를 직접 작성한 경우
     if (proxy.includes('?url=')) {
-      return proxy + encodeURIComponent(targetUrl);
+      return [proxy + encodeURIComponent(targetUrl)];
     }
     if (proxy.includes('?')) {
-      return `${proxy}&url=${encodeURIComponent(targetUrl)}`;
+      return [`${proxy}&url=${encodeURIComponent(targetUrl)}`];
     }
 
-    // 2) 일반 Cloudflare Worker 형태 (예: https://notion-proxy.workers.dev)
-    // 뒤에 슬래시가 붙어있든 아니든 처리
-    const cleanProxy = proxy.replace(/\/+$/, '');
+    // 일반 프록시 도메인인 경우 (예: https://notion-proxy.xxx.workers.dev)
+    // 1순위: ?url= 쿼리 전달 형태
+    // 2순위: /v1/... 직접 리버스 프록시 형태
+    return [
+      `${proxy}/?url=${encodeURIComponent(targetUrl)}`,
+      `${proxy}${apiPath}`
+    ];
+  }
 
-    // 만약 프록시 이름에 'corsproxy' 또는 'allorigins'가 있다면 ?url= 형태로 자동 전환
-    if (cleanProxy.includes('corsproxy.io')) {
-      return `${cleanProxy}/?url=${encodeURIComponent(targetUrl)}`;
-    }
-    if (cleanProxy.includes('allorigins.win')) {
-      return `${cleanProxy}/raw?url=${encodeURIComponent(targetUrl)}`;
+  /**
+   * 노션 API 호출 (스마트 프록시 듀얼 시도 & Retry-After 대응)
+   */
+  async request(method, apiPath, body = null) {
+    const candidateUrls = this.getCandidateUrls(apiPath);
+
+    const headers = {
+      'Authorization': `Bearer ${this.token}`,
+      'Notion-Version': NOTION_VERSION,
+      'Content-Type': 'application/json'
+    };
+
+    let lastError = null;
+
+    for (const url of candidateUrls) {
+      let attempts = 0;
+      while (attempts < 2) {
+        attempts++;
+        let res;
+        try {
+          res = await fetch(url, {
+            method,
+            headers,
+            body: body ? JSON.stringify(body) : undefined
+          });
+        } catch (err) {
+          lastError = new Error(`프록시 통신 실패 (${url}): ${err.message}`);
+          break; // 다음 candidate URL 시도
+        }
+
+        if (res.status === 429 || res.status === 529) {
+          const retryAfter = Number(res.headers.get('retry-after') || 1);
+          await new Promise(r => setTimeout(r, Math.min(retryAfter, 5) * 1000 + attempts * 300));
+          continue;
+        }
+
+        if (res.ok) {
+          return res.json();
+        }
+
+        // 404가 나오면 리버스 프록시 형태일 수 있으므로 다음 URL 후보 시도
+        if (res.status === 404 && candidateUrls.length > 1 && url === candidateUrls[0]) {
+          break;
+        }
+
+        let errMsg = '';
+        try {
+          const errJson = await res.json();
+          errMsg = errJson.message || res.statusText;
+        } catch {
+          errMsg = await res.text().catch(() => res.statusText);
+        }
+
+        if (res.status === 401) {
+          throw new Error(`[401 인증 실패] Notion API 토큰이 올바르지 않습니다: ${errMsg}`);
+        }
+        if (res.status === 404) {
+          throw new Error(`[404 찾을 수 없음] 데이터베이스나 페이지가 없거나 통합 봇이 연결되지 않았습니다.`);
+        }
+
+        throw new Error(`Notion API [${res.status}]: ${errMsg}`);
+      }
     }
 
-    // 3) 커스텀 리버스 프록시 vs ?url= 프록시 유연 지원
-    // 만약 워커 주소만 들어온 경우 ?url= 을 기본 파라미터로 붙여 전송
-    return `${cleanProxy}/?url=${encodeURIComponent(targetUrl)}`;
+    throw lastError || new Error('요청 실패 (프록시 주소를 확인하세요)');
   }
 
   /**
@@ -103,7 +162,6 @@ export class NotionClient {
     try {
       await this.request('GET', `/databases/${this.databaseId}`);
     } catch (err) {
-      // 404인 경우 data_sources 또는 통합 연결 누락
       if (err.message.includes('404')) {
         throw new Error(
           `데이터베이스를 찾을 수 없습니다 (404).\n` +
@@ -119,66 +177,6 @@ export class NotionClient {
       botName: user?.name || '통합 봇',
       dbId: this.databaseId
     };
-  }
-
-  /**
-   * 노션 API 호출 (Retry-After 대응)
-   */
-  async request(method, apiPath, body = null) {
-    const url = this.buildUrl(apiPath);
-
-    const headers = {
-      'Authorization': `Bearer ${this.token}`,
-      'Notion-Version': NOTION_VERSION,
-      'Content-Type': 'application/json'
-    };
-
-    let attempts = 0;
-    while (attempts < 3) {
-      attempts++;
-      let res;
-      try {
-        res = await fetch(url, {
-          method,
-          headers,
-          body: body ? JSON.stringify(body) : undefined
-        });
-      } catch (err) {
-        if (attempts >= 3) {
-          throw new Error(`프록시 서버 통신 실패 (${url.split('?')[0]}): 프록시 URL이 유효한지 확인하세요. (${err.message})`);
-        }
-        await new Promise(r => setTimeout(r, 600 * attempts));
-        continue;
-      }
-
-      if (res.status === 429 || res.status === 529) {
-        const retryAfter = Number(res.headers.get('retry-after') || 1);
-        await new Promise(r => setTimeout(r, Math.min(retryAfter, 10) * 1000 + attempts * 300));
-        continue;
-      }
-
-      if (res.ok) {
-        return res.json();
-      }
-
-      let errMsg = '';
-      try {
-        const errJson = await res.json();
-        errMsg = errJson.message || res.statusText;
-      } catch {
-        errMsg = await res.text().catch(() => res.statusText);
-      }
-
-      if (res.status === 401) {
-        throw new Error(`[401 인증 실패] Notion API 토큰이 올바르지 않습니다: ${errMsg}`);
-      }
-      if (res.status === 404) {
-        throw new Error(`[404 찾을 수 없음] 데이터베이스나 페이지가 없거나 권한(연결)이 부여되지 않았습니다.`);
-      }
-
-      throw new Error(`Notion API [${res.status}]: ${errMsg}`);
-    }
-    throw new Error('요청 재시도 횟수 초과');
   }
 
   /**

@@ -125,15 +125,15 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="proxy-input">CORS 프록시 주소 (브라우저 직접 호출용)</label>
+            <label class="form-label" for="proxy-input">CORS 프록시 주소 (본인 Cloudflare Worker 등)</label>
             <input
               type="text"
               id="proxy-input"
               class="passphrase-input"
-              value="https://corsproxy.io/?url="
+              placeholder="https://notion-proxy......"
               required
             >
-            <div class="form-hint">기본: <code>https://corsproxy.io/?url=</code> (또는 개인 Cloudflare Workers 프록시)</div>
+            <div class="form-hint">작성하신 Cloudflare Worker 주소(예: <code>https://notion-proxy...workers.dev</code>)를 입력하세요.</div>
           </div>
 
           <label class="remember-checkbox">
