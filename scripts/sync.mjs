@@ -313,21 +313,85 @@ function toNode(p) {
   };
 }
 
-function buildEdges(nodes) {
+function buildContentBasedEdges(nodes, contentsMap) {
   const ids = new Set(nodes.map(n => n.id));
   const seen = new Set();
   const edges = [];
 
+  function addEdge(a, b, reason = 'relation') {
+    if (!a || !b || a === b) return;
+    if (!ids.has(a) || !ids.has(b)) return;
+    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      edges.push([a, b]);
+    }
+  }
+
+  // 1. 노션 공식 Relation 속성
   for (const n of nodes) {
-    for (const targetId of n.links) {
-      if (!ids.has(targetId)) continue;
-      const key = n.id < targetId ? `${n.id}|${targetId}` : `${targetId}|${n.id}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        edges.push([n.id, targetId]);
+    for (const targetId of n.links || []) {
+      addEdge(n.id, targetId, 'relation');
+    }
+  }
+
+  // 2. 본문 내용 기반 링크 (위키링크 [[제목]], 멘션, 제목 단어 매칭)
+  const titleToNode = new Map();
+  for (const n of nodes) {
+    const cleanTitle = (n.title || '').trim().toLowerCase();
+    if (cleanTitle && cleanTitle.length >= 2 && cleanTitle !== '(제목 없음)') {
+      titleToNode.set(cleanTitle, n.id);
+    }
+  }
+
+  for (const n of nodes) {
+    const md = (contentsMap.get(n.id) || '').toLowerCase();
+    if (!md) continue;
+
+    // 위키링크 [[노트제목]]
+    const wikiMatches = md.matchAll(/\[\[(.*?)\]\]/g);
+    for (const match of wikiMatches) {
+      const targetTitle = match[1].trim().toLowerCase();
+      const targetId = titleToNode.get(targetTitle);
+      if (targetId) addEdge(n.id, targetId, 'wikilink');
+    }
+
+    // 다른 노트 제목이 본문에 언급된 경우 (3자 이상 우선 매칭)
+    for (const [title, targetId] of titleToNode.entries()) {
+      if (targetId === n.id) continue;
+      if (title.length >= 3 && md.includes(title)) {
+        addEdge(n.id, targetId, 'mention');
+      }
+    }
+
+    // 노션 고유 ID가 본문 링크에 포함된 경우
+    for (const other of nodes) {
+      if (other.id === n.id) continue;
+      const cleanOtherId = other.id.replace(/-/g, '').toLowerCase();
+      if (md.includes(cleanOtherId)) {
+        addEdge(n.id, other.id, 'link');
       }
     }
   }
+
+  // 3. 연결선이 적은 경우 공통 태그/폴더 기반 연결 보강 (지식 그물망 형성)
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      // 동일 태그 1개 이상 공유 시 연결
+      if (a.tags && b.tags && a.tags.length > 0 && b.tags.length > 0) {
+        const commonTags = a.tags.filter(t => b.tags.includes(t));
+        if (commonTags.length >= 1) {
+          addEdge(a.id, b.id, 'tag');
+        }
+      }
+      // 또는 같은 폴더(기본 제외)인 경우 연결선 보강
+      if (a.folder && b.folder && a.folder !== '기본' && a.folder === b.folder && edges.length < nodes.length * 1.5) {
+        addEdge(a.id, b.id, 'folder');
+      }
+    }
+  }
+
   return edges;
 }
 
@@ -402,13 +466,19 @@ async function main() {
     if (!liveIds.has(f)) await fs.unlink(`${OUT}/n/${f}`);
   }
 
+  // 본문 텍스트 수집 및 검색 색인 생성
   const searchIndex = [];
+  const contentsMap = new Map();
+
   for (const n of nodes) {
-    let body = '';
+    let fullMd = '';
     try {
       const { md } = JSON.parse(await open(key, await fs.readFile(`${OUT}/n/${n.id}.enc`)));
-      body = (md || '').replace(/[#>*_`\[\]()!|-]+/g, ' ').replace(/\s+/g, ' ').slice(0, 3000);
+      fullMd = md || '';
     } catch {}
+
+    contentsMap.set(n.id, fullMd);
+    const body = fullMd.replace(/[#>*_`\[\]()!|-]+/g, ' ').replace(/\s+/g, ' ').slice(0, 3000);
 
     searchIndex.push({
       id: n.id,
@@ -420,8 +490,12 @@ async function main() {
     });
   }
 
+  // 내용 기반 연결선(Edges) 계산
+  const edges = buildContentBasedEdges(nodes, contentsMap);
+  console.log(`• 내용 및 관계망 기반 연결선(Edges): 총 ${edges.length}개 생성됨`);
+
   const slimNodes = nodes.map(({ links, summary, ...rest }) => rest);
-  await fs.writeFile(`${OUT}/graph.enc`, await seal(key, JSON.stringify({ nodes: slimNodes, edges: buildEdges(nodes) })));
+  await fs.writeFile(`${OUT}/graph.enc`, await seal(key, JSON.stringify({ nodes: slimNodes, edges })));
   await fs.writeFile(`${OUT}/search.enc`, await seal(key, JSON.stringify(searchIndex)));
   await fs.writeFile(`${OUT}/meta.json`, JSON.stringify({
     v: 1,

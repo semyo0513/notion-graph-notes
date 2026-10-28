@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Notion Graph Notes</title>
   <link rel="stylesheet" href="css/style.css">
-  <!-- 고정 버전 CDN 의존성 -->
   <script src="https://unpkg.com/force-graph@1.43.5/dist/force-graph.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.2/dist/purify.min.js"></script>
@@ -13,12 +12,13 @@
 </head>
 <body>
   <div id="app">
-    <!-- 그래프 캔버스 컨테이너 -->
+    <!-- 그래프 캔버스 -->
     <div id="graph-container"></div>
 
     <!-- 상단 툴바 / 컨트롤 -->
     <nav class="top-nav">
       <div class="brand-section">
+        <button id="btn-toggle-explorer" class="btn-icon" title="노트 목록 탐색기 열기/닫기" style="margin-right:4px;">📂</button>
         <svg class="brand-icon" viewBox="0 0 24 24">
           <circle cx="6" cy="6" r="3" />
           <circle cx="18" cy="6" r="3" />
@@ -30,39 +30,95 @@
       </div>
 
       <div class="controls-section">
-        <!-- 검색창 -->
+        <!-- 검색창 (중앙 정렬 지원) -->
         <div class="search-box">
-          <input type="text" id="search-input" placeholder="검색 (제목, 내용, 태그...)" autocomplete="off">
+          <input type="text" id="search-input" placeholder="검색 (중앙 집중 정렬)..." autocomplete="off">
           <button id="search-clear" class="search-clear" title="검색 지우기">✕</button>
         </div>
 
-        <!-- 폴더 필터 -->
         <select id="folder-filter" class="filter-select">
           <option value="">모든 폴더</option>
         </select>
 
-        <!-- 태그 필터 -->
         <select id="tag-filter" class="filter-select">
           <option value="">모든 태그</option>
         </select>
 
-        <!-- 확대/축소 및 뷰 리셋 -->
+        <!-- 물리 & 애니메이션 설정 버튼 -->
+        <button id="btn-toggle-physics" class="btn-icon" title="물리 엔진 및 장력/파티클 설정">🎨</button>
+
+        <!-- Gemini AI 설정 버튼 -->
+        <button id="btn-gemini-settings" class="btn-icon" title="Gemini AI 지식 비서 설정">🤖</button>
+
+        <!-- 줌/리셋 컨트롤 -->
         <button id="btn-zoom-in" class="btn-icon" title="확대">+</button>
         <button id="btn-zoom-out" class="btn-icon" title="축소">−</button>
         <button id="btn-reset-view" class="btn-icon" title="화면 중앙 맞춤">⊙</button>
 
-        <!-- 세션 잠금(로그아웃) -->
+        <!-- 잠금 -->
         <button id="btn-lock" class="btn-icon" title="다시 잠그기 (로그아웃)">🔒</button>
       </div>
     </nav>
 
+    <!-- 좌측 파일/노트 탐색기 드로어 -->
+    <aside id="explorer-sidebar" class="explorer-sidebar">
+      <div class="explorer-header">
+        <h3 class="explorer-title">노트 탐색기</h3>
+        <button class="explorer-close" title="닫기">✕</button>
+      </div>
+
+      <div class="explorer-tabs">
+        <button id="tab-folder" class="explorer-tab active">📁 폴더</button>
+        <button id="tab-tag" class="explorer-tab">#️⃣ 태그</button>
+        <button id="tab-recent" class="explorer-tab">🕒 최근</button>
+      </div>
+
+      <div style="padding: 10px 14px 6px;">
+        <input type="text" class="explorer-search" placeholder="목록 필터링..." autocomplete="off">
+      </div>
+
+      <div class="explorer-list"></div>
+    </aside>
+
+    <!-- 물리 제어 & 애니메이션 팝업 패널 -->
+    <div id="physics-panel" class="physics-panel hidden">
+      <div class="physics-header">
+        <h4 style="font-size:13px; font-weight:700;">그래프 물리 & 애니메이션</h4>
+        <button id="physics-close" class="modal-close-btn" style="font-size:16px;">✕</button>
+      </div>
+      <div class="physics-body">
+        <div class="physics-row">
+          <label>연결선 장력 (거리): <span id="val-link-dist">60</span>px</label>
+          <input type="range" id="slider-link-dist" min="20" max="200" value="60">
+        </div>
+        <div class="physics-row">
+          <label>노드 반발력: <span id="val-charge">-160</span></label>
+          <input type="range" id="slider-charge" min="-500" max="-30" value="-160">
+        </div>
+        <div class="physics-row">
+          <label>중심 중력: <span id="val-gravity">0.15</span></label>
+          <input type="range" id="slider-gravity" min="0.02" max="0.5" step="0.02" value="0.15">
+        </div>
+        <div class="physics-row">
+          <label>노드 크기 배율: <span id="val-node-size">1x</span></label>
+          <input type="range" id="slider-node-size" min="0.5" max="2.5" step="0.1" value="1.0">
+        </div>
+        <div class="physics-row" style="margin-top:6px;">
+          <label class="remember-checkbox">
+            <input type="checkbox" id="check-particles" checked>
+            <span>✨ 연결선 별빛 파티클 애니메이션</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
     <!-- 좌측 하단 정보 HUD -->
     <div class="graph-hud">
       <div class="hud-item">연결선: <strong id="edge-count">0</strong></div>
-      <div class="hud-item">최근 동기화: <strong id="last-sync-time">-</strong></div>
+      <div class="hud-item">동기화: <strong id="last-sync-time">-</strong></div>
     </div>
 
-    <!-- 우측 슬라이딩 사이드바 (노트 열람) -->
+    <!-- 우측 슬라이딩 사이드바 (노트 본문 + AI 챗봇 탭) -->
     <aside id="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-title-area">
@@ -72,19 +128,64 @@
         <button class="sidebar-close" title="닫기 (ESC)">✕</button>
       </div>
 
-      <div class="sidebar-body">
+      <!-- 탭 바 -->
+      <div class="sidebar-tabs">
+        <button id="tab-btn-note" class="sidebar-tab active">📄 노트 본문</button>
+        <button id="tab-btn-ai" class="sidebar-tab">🤖 Gemini AI 지식 비서</button>
+      </div>
+
+      <!-- 노트 본문 뷰 -->
+      <div id="sidebar-view-note" class="sidebar-body">
         <!-- 마크다운 렌더링 영역 -->
+      </div>
+
+      <!-- Gemini AI 대화 뷰 -->
+      <div id="sidebar-view-ai" class="sidebar-ai-body hidden">
+        <div id="ai-messages" class="ai-messages">
+          <div class="ai-chat-bubble assistant">
+            👋 안녕하세요! 지식 비서 AI입니다.<br>
+            현재 노트의 핵심 요약이나, 다른 노트들과의 상관관계, 새로운 아이디어를 편하게 질문해 보세요!
+          </div>
+        </div>
+        <form id="ai-chat-form" class="ai-chat-form">
+          <input type="text" id="ai-chat-input" placeholder="노트에 대해 질문하세요..." autocomplete="off">
+          <button type="submit" class="btn-submit" style="padding:6px 14px; font-size:12px;">전송</button>
+        </form>
       </div>
 
       <div class="sidebar-footer">
         <span class="sidebar-date"></span>
         <a href="#" target="_blank" rel="noopener noreferrer" class="btn-notion">
-          <span>Notion에서 열기</span> ↗
+          <span>Notion 원본 열기</span> ↗
         </a>
       </div>
     </aside>
 
-    <!-- 잠금 해제 모달 대화상자 (프록시 불필요, 오직 비밀번호 하나만 입력) -->
+    <!-- Gemini API Key 설정 모달 -->
+    <div id="gemini-key-modal" class="modal-overlay hidden">
+      <div class="unlock-card settings-card">
+        <div class="settings-modal-header">
+          <h2 class="unlock-title" style="margin:0;">🤖 Gemini AI 설정</h2>
+          <button type="button" id="gemini-modal-close" class="modal-close-btn" title="닫기">✕</button>
+        </div>
+        <p class="unlock-desc" style="text-align:left; margin-bottom:14px;">
+          내 노션 노트를 바탕으로 심층 질의응답과 요약을 수행하는 Google Gemini API 키를 등록합니다.<br>
+          API 키는 <strong>오직 현재 브라우저의 LocalStorage에만 저장</strong>됩니다.
+        </p>
+        <form id="gemini-key-form" class="unlock-form">
+          <div class="form-group">
+            <label class="form-label" for="gemini-key-input">Gemini API Key</label>
+            <input type="password" id="gemini-key-input" class="passphrase-input" placeholder="AIzaSy..." autocomplete="off">
+            <div class="form-hint">
+              키가 없으신가요? <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#60a5fa; text-decoration:underline;">Google AI Studio에서 무료 발급</a>
+            </div>
+          </div>
+          <button type="submit" class="btn-submit">API 키 저장</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- 잠금 해제 모달 대화상자 -->
     <div id="unlock-modal" class="modal-overlay">
       <div class="unlock-card">
         <div class="unlock-icon">
@@ -128,6 +229,6 @@
     <div id="toast-container" class="toast-container"></div>
   </div>
 
-  <script type="module" src="js/app.js?v=20261028_1"></script>
+  <script type="module" src="js/app.js?v=20261028_3"></script>
 </body>
 </html>

@@ -694,3 +694,329 @@ select.filter-select:hover {
     border-radius: 0;
   }
 }
+
+/* ───── 좌측 파일 탐색기 드로어 ───── */
+.explorer-sidebar {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  bottom: 16px;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-card);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(-120%);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 25;
+  user-select: text;
+}
+
+.explorer-sidebar.open {
+  transform: translateX(0);
+}
+
+.explorer-header {
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.explorer-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.explorer-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.explorer-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.explorer-tab {
+  flex: 1;
+  padding: 8px 4px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.explorer-tab.active {
+  color: var(--accent-hover);
+  border-bottom-color: var(--accent-color);
+  font-weight: 600;
+}
+
+.explorer-search {
+  width: 100%;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+.explorer-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.explorer-group {
+  margin-bottom: 10px;
+}
+
+.explorer-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.explorer-group-title:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.explorer-items {
+  margin-left: 10px;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.explorer-items.collapsed {
+  display: none;
+}
+
+.explorer-item {
+  padding: 5px 8px;
+  font-size: 13px;
+  color: #d1d5db;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.15s;
+}
+
+.explorer-item:hover {
+  background: rgba(124, 77, 255, 0.15);
+  color: #fff;
+}
+
+.explorer-item-icon {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.explorer-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ───── 물리 & 애니메이션 설정 패널 ───── */
+.physics-panel {
+  position: absolute;
+  top: 68px;
+  right: 16px;
+  width: 290px;
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 14px 16px;
+  z-index: 15;
+  color: var(--text-primary);
+}
+
+.physics-panel.hidden {
+  display: none;
+}
+
+.physics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.physics-row {
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.physics-row label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  justify-content: space-between;
+}
+
+.physics-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}
+
+/* ───── 사이드바 탭 및 Gemini AI 챗봇 ───── */
+.sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.sidebar-tab {
+  flex: 1;
+  padding: 10px 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.sidebar-tab.active {
+  color: var(--accent-hover);
+  border-bottom-color: var(--accent-color);
+  background: rgba(124, 77, 255, 0.08);
+}
+
+.content-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border-color);
+}
+
+.btn-sm {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-sm:hover {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.editor-textarea {
+  width: 100%;
+  background: #181920;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  resize: vertical;
+  outline: none;
+}
+
+.editor-textarea:focus {
+  border-color: var(--accent-color);
+}
+
+.sidebar-ai-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 14px;
+}
+
+.ai-messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+  margin-bottom: 10px;
+}
+
+.ai-chat-bubble {
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 90%;
+  word-break: break-word;
+}
+
+.ai-chat-bubble.assistant {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: #e5e7eb;
+  align-self: flex-start;
+}
+
+.ai-chat-bubble.user {
+  background: var(--accent-color);
+  color: #fff;
+  align-self: flex-end;
+}
+
+.ai-chat-form {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-chat-form input {
+  flex: 1;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+.ai-chat-form input:focus {
+  border-color: var(--accent-color);
+}
