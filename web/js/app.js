@@ -1,4 +1,4 @@
-import { NotionClient } from './notion-client.js';
+import { NotionClient, extractNotionId } from './notion-client.js';
 import { SearchEngine } from './search.js';
 import { GraphView } from './graph.js';
 import { SidebarView } from './sidebar.js';
@@ -21,6 +21,7 @@ class App {
     this.proxyInput = document.getElementById('proxy-input');
     this.rememberCheck = document.getElementById('remember-settings');
     this.btnSaveSettings = document.getElementById('btn-save-settings');
+    this.btnTestConnection = document.getElementById('btn-test-connection');
     this.btnDemoMode = document.getElementById('btn-demo-mode');
     this.settingsError = document.getElementById('settings-error');
 
@@ -93,13 +94,58 @@ class App {
   }
 
   initEventListeners() {
+    // DB ID 인풋에서 URL 입력 시 32자리 ID 자동 추출
+    this.dbIdInput.addEventListener('blur', () => {
+      const val = this.dbIdInput.value.trim();
+      const extracted = extractNotionId(val);
+      if (extracted && extracted !== val) {
+        this.dbIdInput.value = extracted;
+        this.showToast(`URL에서 데이터베이스 ID(${extracted})를 자동 추출했습니다.`, 2500);
+      }
+    });
+
+    // 연결 테스트 버튼
+    this.btnTestConnection?.addEventListener('click', async () => {
+      const token = this.tokenInput.value.trim();
+      const rawDbId = this.dbIdInput.value.trim();
+      const dbId = extractNotionId(rawDbId);
+      const proxy = this.proxyInput.value.trim() || 'https://corsproxy.io/?url=';
+
+      if (dbId) this.dbIdInput.value = dbId;
+
+      if (!token) {
+        this.settingsError.textContent = 'Notion API 토큰을 입력하세요.';
+        return;
+      }
+      if (!dbId) {
+        this.settingsError.textContent = '데이터베이스 ID(또는 URL)를 입력하세요.';
+        return;
+      }
+
+      this.settingsError.textContent = '연결 상태를 진단하는 중...';
+      this.settingsError.style.color = '#93c5fd';
+      this.notionClient.setCredentials({ token, databaseId: dbId, proxyUrl: proxy });
+
+      try {
+        const res = await this.notionClient.testConnection();
+        this.settingsError.style.color = '#10b981';
+        this.settingsError.textContent = `✅ 연결 성공!\n- 봇 이름: ${res.botName}\n- 데이터베이스 ID: ${res.dbId}\n지금 [설정 저장 및 동기화]를 누르시면 됩니다.`;
+      } catch (err) {
+        this.settingsError.style.color = '#ef4444';
+        this.settingsError.textContent = `❌ 연결 실패:\n${err.message}`;
+      }
+    });
+
     // 설정 폼 저장
     this.settingsForm.addEventListener('submit', (e) => {
       e.preventDefault();
       const token = this.tokenInput.value.trim();
-      const dbId = this.dbIdInput.value.trim();
+      const rawDbId = this.dbIdInput.value.trim();
+      const dbId = extractNotionId(rawDbId);
       const proxy = this.proxyInput.value.trim() || 'https://corsproxy.io/?url=';
       const remember = this.rememberCheck.checked;
+
+      if (dbId) this.dbIdInput.value = dbId;
 
       if (!token || !dbId) {
         this.settingsError.textContent = 'Notion API 토큰과 데이터베이스 ID를 모두 입력하세요.';

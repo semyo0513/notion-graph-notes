@@ -141,16 +141,21 @@
             <span>이 브라우저에 설정 저장 (해제 시 탭 닫을 때 삭제)</span>
           </label>
 
-          <button type="submit" id="btn-save-settings" class="btn-submit">
-            설정 저장 및 노션 동기화
-          </button>
+          <div style="display:flex; gap:8px;">
+            <button type="button" id="btn-test-connection" class="btn-secondary" style="flex:1;">
+              🔍 연결 테스트
+            </button>
+            <button type="submit" id="btn-save-settings" class="btn-submit" style="flex:2;">
+              설정 저장 및 동기화
+            </button>
+          </div>
 
           <button type="button" id="btn-demo-mode" class="btn-secondary">
             토큰 없이 데모 둘러보기
           </button>
         </form>
 
-        <div id="settings-error" class="unlock-error"></div>
+        <div id="settings-error" class="unlock-error" style="text-align:left; white-space:pre-wrap; line-height:1.5;"></div>
       </div>
     </div>
 

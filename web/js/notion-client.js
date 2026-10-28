@@ -1,11 +1,41 @@
-// 브라우저 직접 연동 Notion API 클라이언트 (CORS 프록시 지원)
+// 브라우저 직접 연동 Notion API 클라이언트 (CORS 프록시 및 자동 URL 정제 지원)
 const NOTION_API = 'https://api.notion.com/v1';
 const NOTION_VERSION = '2026-03-11';
+
+/**
+ * 사용자가 전체 URL을 넣어도 32자리 Database ID를 자동 추출
+ */
+export function extractNotionId(input) {
+  if (!input) return '';
+  const str = String(input).trim();
+
+  // 1. 하이픈 포함 UUID (예: 29841fbc-8a23-405f-88ba-0123456789ab)
+  const uuidMatch = str.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
+  if (uuidMatch) {
+    return uuidMatch[0].replace(/-/g, '').toLowerCase();
+  }
+
+  // 2. 32자리 16진수 문자열 (예: 29841fbc8a23405f88ba0123456789ab)
+  const hex32Match = str.match(/[0-9a-fA-F]{32}/);
+  if (hex32Match) {
+    return hex32Match[0].toLowerCase();
+  }
+
+  // 3. URL 형태에서 마지막 32자리 추출 (예: /p/제목-29841fbc8a23405f88ba0123456789ab)
+  const cleanUrl = str.split('?')[0].split('#')[0];
+  const lastSegment = cleanUrl.split('/').filter(Boolean).pop() || '';
+  const hexInLast = lastSegment.replace(/[^0-9a-fA-F]/g, '');
+  if (hexInLast.length >= 32) {
+    return hexInLast.slice(-32).toLowerCase();
+  }
+
+  return str.replace(/[^a-zA-Z0-9_-]/g, '');
+}
 
 export class NotionClient {
   constructor({ token, databaseId, proxyUrl = 'https://corsproxy.io/?url=' }) {
     this.token = (token || '').trim();
-    this.databaseId = (databaseId || '').trim();
+    this.databaseId = extractNotionId(databaseId);
     this.proxyUrl = (proxyUrl || '').trim();
     this.cacheDbName = 'notion_graph_cache';
     this.db = null;
@@ -13,24 +43,82 @@ export class NotionClient {
 
   setCredentials({ token, databaseId, proxyUrl }) {
     if (token !== undefined) this.token = token.trim();
-    if (databaseId !== undefined) this.databaseId = databaseId.trim();
+    if (databaseId !== undefined) this.databaseId = extractNotionId(databaseId);
     if (proxyUrl !== undefined) this.proxyUrl = proxyUrl.trim();
   }
 
   /**
-   * CORS 프록시를 적용한 URL 생성
+   * 프록시 형태에 맞춰 최적의 URL 자동 구성
    */
   buildUrl(apiPath) {
     const targetUrl = NOTION_API + apiPath;
     if (!this.proxyUrl) return targetUrl;
 
-    if (this.proxyUrl.includes('?url=')) {
-      return this.proxyUrl + encodeURIComponent(targetUrl);
+    const proxy = this.proxyUrl.trim();
+
+    // 1) 프록시 주소에 이미 ?url= 이나 쿼리 매개변수가 있는 경우
+    if (proxy.includes('?url=')) {
+      return proxy + encodeURIComponent(targetUrl);
     }
-    if (this.proxyUrl.endsWith('/')) {
-      return this.proxyUrl + targetUrl;
+    if (proxy.includes('?')) {
+      return `${proxy}&url=${encodeURIComponent(targetUrl)}`;
     }
-    return `${this.proxyUrl}/${targetUrl}`;
+
+    // 2) 일반 Cloudflare Worker 형태 (예: https://notion-proxy.workers.dev)
+    // 뒤에 슬래시가 붙어있든 아니든 처리
+    const cleanProxy = proxy.replace(/\/+$/, '');
+
+    // 만약 프록시 이름에 'corsproxy' 또는 'allorigins'가 있다면 ?url= 형태로 자동 전환
+    if (cleanProxy.includes('corsproxy.io')) {
+      return `${cleanProxy}/?url=${encodeURIComponent(targetUrl)}`;
+    }
+    if (cleanProxy.includes('allorigins.win')) {
+      return `${cleanProxy}/raw?url=${encodeURIComponent(targetUrl)}`;
+    }
+
+    // 3) 커스텀 리버스 프록시 vs ?url= 프록시 유연 지원
+    // 만약 워커 주소만 들어온 경우 ?url= 을 기본 파라미터로 붙여 전송
+    return `${cleanProxy}/?url=${encodeURIComponent(targetUrl)}`;
+  }
+
+  /**
+   * 연결 및 권한 즉시 진단 함수
+   */
+  async testConnection() {
+    if (!this.token) throw new Error('Notion API 토큰(ntn_... 또는 secret_...)을 입력해 주세요.');
+    if (!this.databaseId) throw new Error('올바른 데이터베이스 ID(또는 URL)를 입력해 주세요.');
+
+    // 1. 프록시 및 토큰 유효성 검사 (GET /v1/users/me)
+    let user;
+    try {
+      user = await this.request('GET', '/users/me');
+    } catch (err) {
+      if (err.message.includes('401')) {
+        throw new Error('토큰 인증 실패 (401): 입력하신 노션 엑세스 토큰이 유효하지 않습니다.');
+      }
+      throw new Error(`프록시 또는 토큰 오류: ${err.message}`);
+    }
+
+    // 2. 데이터베이스 접근 권한 검사 (POST /v1/databases/{id}/query 또는 GET /v1/databases/{id})
+    try {
+      await this.request('GET', `/databases/${this.databaseId}`);
+    } catch (err) {
+      // 404인 경우 data_sources 또는 통합 연결 누락
+      if (err.message.includes('404')) {
+        throw new Error(
+          `데이터베이스를 찾을 수 없습니다 (404).\n` +
+          `추출된 DB ID: ${this.databaseId}\n\n` +
+          `[해결 방법]\n` +
+          `1. 노션 DB 페이지 우측 상단 [···] -> [연결(Connections)]에 생성하신 내부 통합을 반드시 추가해 주세요. (가장 흔한 원인)\n` +
+          `2. 데이터베이스 ID가 맞는지 확인해 주세요.`
+        );
+      }
+    }
+
+    return {
+      botName: user?.name || '통합 봇',
+      dbId: this.databaseId
+    };
   }
 
   /**
@@ -46,7 +134,7 @@ export class NotionClient {
     };
 
     let attempts = 0;
-    while (attempts < 5) {
+    while (attempts < 3) {
       attempts++;
       let res;
       try {
@@ -56,16 +144,16 @@ export class NotionClient {
           body: body ? JSON.stringify(body) : undefined
         });
       } catch (err) {
-        if (attempts >= 5) {
-          throw new Error(`네트워크/CORS 오류: 프록시 주소 또는 인터넷 연결을 확인하세요. (${err.message})`);
+        if (attempts >= 3) {
+          throw new Error(`프록시 서버 통신 실패 (${url.split('?')[0]}): 프록시 URL이 유효한지 확인하세요. (${err.message})`);
         }
-        await new Promise(r => setTimeout(r, 1000 * attempts));
+        await new Promise(r => setTimeout(r, 600 * attempts));
         continue;
       }
 
       if (res.status === 429 || res.status === 529) {
         const retryAfter = Number(res.headers.get('retry-after') || 1);
-        await new Promise(r => setTimeout(r, Math.min(retryAfter, 30) * 1000 + attempts * 300));
+        await new Promise(r => setTimeout(r, Math.min(retryAfter, 10) * 1000 + attempts * 300));
         continue;
       }
 
@@ -82,10 +170,10 @@ export class NotionClient {
       }
 
       if (res.status === 401) {
-        throw new Error('Notion API 토큰(API Key)이 올바르지 않습니다.');
+        throw new Error(`[401 인증 실패] Notion API 토큰이 올바르지 않습니다: ${errMsg}`);
       }
       if (res.status === 404) {
-        throw new Error('데이터베이스 또는 페이지를 찾을 수 없습니다. (ID 확인 및 노션 DB 페이지 우측 상단 ··· -> 연결(Connections)에 해당 통합이 추가되어 있는지 확인하세요)');
+        throw new Error(`[404 찾을 수 없음] 데이터베이스나 페이지가 없거나 권한(연결)이 부여되지 않았습니다.`);
       }
 
       throw new Error(`Notion API [${res.status}]: ${errMsg}`);
@@ -109,7 +197,7 @@ export class NotionClient {
       if (onProgress) onProgress(0, 0, '데이터베이스 확인 중...');
       await this.request('POST', endpoint, { page_size: 1 });
     } catch (err) {
-      // 폴백: databases 쿼리
+      // 2차 시도: databases 쿼리
       endpoint = `/databases/${this.databaseId}/query`;
     }
 
@@ -196,7 +284,6 @@ export class NotionClient {
    * 개별 페이지 마크다운 본문 가져오기 (IndexedDB 로컬 캐시 연동)
    */
   async fetchPageMarkdown(pageId, editedTime) {
-    // 1. IndexedDB 캐시 확인
     await this.initCacheDb();
     if (this.db) {
       const cached = await this.getFromCache(pageId);
@@ -205,7 +292,6 @@ export class NotionClient {
       }
     }
 
-    // 2. /v1/pages/{id}/markdown 시도
     let mdText = '';
     try {
       const res = await this.request('GET', `/pages/${pageId}/markdown`);
@@ -240,7 +326,6 @@ export class NotionClient {
       }
     }
 
-    // 3. 캐시 저장
     if (this.db) {
       await this.saveToCache(pageId, { md: mdText, edited: editedTime });
     }
@@ -248,7 +333,6 @@ export class NotionClient {
     return mdText;
   }
 
-  /* ───── IndexedDB 브라우저 캐시 관리 ───── */
   initCacheDb() {
     if (this.db) return Promise.resolve(this.db);
     return new Promise((resolve) => {
@@ -285,17 +369,6 @@ export class NotionClient {
       const tx = this.db.transaction('notes', 'readwrite');
       const store = tx.objectStore('notes');
       store.put({ id, ...data });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-    });
-  }
-
-  clearCache() {
-    return new Promise((resolve) => {
-      if (!this.db) return resolve();
-      const tx = this.db.transaction('notes', 'readwrite');
-      const store = tx.objectStore('notes');
-      store.clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
