@@ -1,23 +1,19 @@
 {
   "name": "notion-graph-notes",
-  "version": "1.0.0",
-  "description": "Notion x Force-Directed Graph Notes WebApp with Zero-Knowledge Client-Side Encryption",
+  "version": "2.0.0",
+  "description": "Notion x Force-Directed Graph Notes WebApp (Client-Side Local Storage & Realtime Direct Sync)",
   "type": "module",
   "scripts": {
-    "sync": "node scripts/sync.mjs",
-    "mock": "node scripts/mock-generate.mjs",
-    "verify": "node scripts/verify-decrypt.mjs",
-    "build:local": "npm run mock && node -e \"const fs=require('fs'); fs.cpSync('web', 'dist', {recursive:true});\"",
+    "start": "node scripts/serve.mjs",
     "serve": "node scripts/serve.mjs"
   },
   "keywords": [
     "notion",
     "graph-view",
     "knowledge-graph",
-    "aes-gcm",
-    "pbkdf2",
+    "zero-server",
+    "localstorage",
     "github-pages"
   ],
-  "author": "",
   "license": "MIT"
 }
