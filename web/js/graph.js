@@ -34,6 +34,15 @@ export class GraphView {
     ];
   }
 
+  calcNodeRadius(node) {
+    const neighborsCount = node.neighbors ? node.neighbors.size : 0;
+    // 제곱근 기반 부드러운 완충 스케일링 (극단적인 크기 불균형 원천 차단)
+    // 0개 연결: 기본 4.2px, 수십 개 연결: 최대 9.5px
+    const scaledIncrement = Math.min(5.5, Math.sqrt(neighborsCount) * 1.1);
+    const baseRadius = 4.2 + scaledIncrement;
+    return baseRadius * (this.params.nodeSizeScale || 1.0);
+  }
+
   getFolderColor(folder) {
     const key = folder || '기본';
     if (!this.folderColors.has(key)) {
@@ -79,7 +88,7 @@ export class GraphView {
       .graphData({ nodes: this.nodes, links: this.links })
       .backgroundColor('#121316')
       .nodeId('id')
-      .nodeVal(n => (2 + (n.neighbors ? n.neighbors.size * 0.8 : 1)) * this.params.nodeSizeScale)
+      .nodeVal(n => this.calcNodeRadius(n))
       .linkSource('source')
       .linkTarget('target')
       .d3AlphaDecay(0.02)
@@ -109,8 +118,7 @@ export class GraphView {
           isDimmed = true;
         }
 
-        const baseSize = Math.max(3, 2 + (node.neighbors ? node.neighbors.size * 0.6 : 1));
-        const size = baseSize * this.params.nodeSizeScale;
+        const size = this.calcNodeRadius(node);
         const color = this.getFolderColor(node.folder);
 
         // 글로우 효과 (하이라이트된 노드)
@@ -154,7 +162,7 @@ export class GraphView {
         }
       })
       .nodePointerAreaPaint((node, color, ctx) => {
-        const size = Math.max(6, (2 + (node.neighbors ? node.neighbors.size * 0.6 : 1) + 4) * this.params.nodeSizeScale);
+        const size = this.calcNodeRadius(node) + 4;
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
