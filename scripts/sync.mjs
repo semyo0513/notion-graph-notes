@@ -133,35 +133,59 @@ async function resolveDataSourceId(initialId) {
     console.log(`  (pages 조회 불가: ${err.details || err.message})`);
   }
 
-  // 4. 검색 API로 통합 봇이 접근 가능한 모든 DB 목록 출력 및 매칭 시도
-  console.log(`• 4차 시도: 통합 봇이 접근 가능한 데이터베이스 전체 검색...`);
+  // 4. 검색 API로 통합 봇이 접근 가능한 모든 DB/Data Source 목록 출력 및 자동 연결
+  console.log(`• 4차 시도: 통합 봇이 접근 가능한 데이터 소스 전체 검색...`);
   try {
-    const searchRes = await notion('POST', '/search', {
-      filter: { value: 'database', property: 'object' },
-      page_size: 10
-    });
+    // 최신 API 규격: filter.value = 'data_source', in_trash = false
+    let searchRes;
+    try {
+      searchRes = await notion('POST', '/search', {
+        filter: { value: 'data_source', property: 'object' },
+        in_trash: false,
+        page_size: 10
+      });
+    } catch {
+      // 필터 없는 전체 검색 폴백
+      searchRes = await notion('POST', '/search', {
+        in_trash: false,
+        page_size: 20
+      });
+    }
 
-    if (searchRes.results && searchRes.results.length > 0) {
-      console.log(`✓ 접근 가능한 데이터베이스 목록 (${searchRes.results.length}개 발견):`);
-      for (const d of searchRes.results) {
-        const dTitle = d.title?.map(t => t.plain_text).join('') || '(제목 없음)';
-        const cleanId = d.id.replace(/-/g, '');
-        console.log(`  - [${dTitle}] ID: ${cleanId}`);
+    const items = searchRes.results || [];
+    if (items.length > 0) {
+      console.log(`✓ 통합 봇에게 공유된 노션 항목 (${items.length}개 발견):`);
+      for (const item of items) {
+        const type = item.object;
+        const title = (item.title || item.properties?.['이름']?.title || [])
+          .map(t => t.plain_text).join('') || item.id;
+        console.log(`  - [${type}] "${title}" (ID: ${item.id.replace(/-/g, '')})`);
       }
-      const firstDb = searchRes.results[0];
-      const targetDbId = firstDb.id.replace(/-/g, '');
-      console.log(`\n➔ 첫 번째 데이터베이스 [${firstDb.title?.map(t => t.plain_text).join('')}] ID(${targetDbId})로 자동 연결합니다.\n`);
-      return await resolveDataSourceId(targetDbId);
+
+      // data_source 또는 database 항목 찾기
+      const targetEntity = items.find(i => i.object === 'data_source') ||
+                           items.find(i => i.object === 'database') ||
+                           items[0];
+
+      if (targetEntity) {
+        const foundId = targetEntity.id.replace(/-/g, '');
+        console.log(`\n➔ 발견된 항목 "${targetEntity.object}" (ID: ${foundId})로 자동 동기화를 진행합니다!\n`);
+        return foundId;
+      }
+    } else {
+      console.log(`  (통합 봇에게 공유된 데이터베이스가 0개입니다)`);
     }
   } catch (err) {
-    console.log(`  (검색 API 실패: ${err.message})`);
+    console.log(`  (검색 API 오류: ${err.message})`);
   }
 
   throw new Error(
-    `입력하신 ID(${initialId})에 해당하는 데이터베이스를 찾을 수 없습니다.\n` +
-    `[해결 방법]\n` +
-    `1. 노션 DB 페이지 우측 상단 [···] -> [연결(Connections)]에 생성하신 통합 봇을 반드시 추가해 주세요.\n` +
-    `2. 데이터베이스 제목 우측 [···] -> [데이터 소스 관리] -> [데이터 소스 ID 복사]를 눌러 그 값을 GitHub Secret에 넣어주세요.`
+    `입력하신 ID(${initialId})에 해당하는 데이터베이스를 찾을 수 없으며, 통합 봇 "옵시디언2"에게 공유된 데이터가 없습니다.\n\n` +
+    `[가장 중요한 해결 방법]\n` +
+    `1. 그래프로 보고자 하시는 노션 데이터베이스 페이지를 엽니다.\n` +
+    `2. 페이지 우측 상단 [···] 클릭 -> [연결(Connections)] 클릭\n` +
+    `3. 목록에서 통합 봇 "옵시디언2" 를 반드시 추가해 주세요!\n` +
+    `   (이 작업을 하지 않으면 노션 보안 정책상 API로 데이터를 가져올 수 없습니다)`
   );
 }
 
