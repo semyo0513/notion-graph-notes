@@ -123,6 +123,99 @@ class App {
       this.handleFilterChange();
     });
 
+    // 모바일 드롭다운 검색창 제어
+    const mobileSearchBar = document.getElementById('mobile-search-bar');
+    const mobileSearchInput = document.getElementById('mobile-search-input');
+    const mobileSearchClear = document.getElementById('mobile-search-clear');
+
+    document.getElementById('btn-mobile-search-toggle')?.addEventListener('click', () => {
+      mobileSearchBar?.classList.toggle('hidden');
+      if (!mobileSearchBar?.classList.contains('hidden')) {
+        mobileSearchInput?.focus();
+      }
+    });
+
+    mobileSearchInput?.addEventListener('input', (e) => {
+      this.searchInput.value = e.target.value;
+      this.handleFilterChange();
+    });
+
+    mobileSearchClear?.addEventListener('click', () => {
+      if (mobileSearchInput) mobileSearchInput.value = '';
+      this.searchInput.value = '';
+      this.handleFilterChange();
+      mobileSearchBar?.classList.add('hidden');
+    });
+
+    // 모바일 바텀시트 제어
+    const mobileSheet = document.getElementById('mobile-tools-sheet');
+    document.getElementById('btn-mobile-menu')?.addEventListener('click', () => {
+      mobileSheet?.classList.remove('hidden');
+    });
+    document.getElementById('btn-close-sheet')?.addEventListener('click', () => {
+      mobileSheet?.classList.add('hidden');
+    });
+
+    // 모바일 바텀시트 내부 액션 버튼들
+    document.getElementById('mobile-color-select')?.addEventListener('change', (e) => {
+      this.graphView.setColorMode(e.target.value);
+      const desktopColorSelect = document.getElementById('color-mode-select');
+      if (desktopColorSelect) desktopColorSelect.value = e.target.value;
+      mobileSheet?.classList.add('hidden');
+    });
+
+    document.getElementById('mobile-folder-filter')?.addEventListener('change', (e) => {
+      this.folderSelect.value = e.target.value;
+      this.handleFilterChange();
+      mobileSheet?.classList.add('hidden');
+    });
+
+    document.getElementById('mobile-tag-filter')?.addEventListener('change', (e) => {
+      this.tagSelect.value = e.target.value;
+      this.handleFilterChange();
+      mobileSheet?.classList.add('hidden');
+    });
+
+    document.getElementById('mobile-btn-3d')?.addEventListener('click', () => {
+      mobileSheet?.classList.add('hidden');
+      document.getElementById('btn-toggle-3d')?.click();
+    });
+
+    document.getElementById('mobile-btn-orphan')?.addEventListener('click', () => {
+      mobileSheet?.classList.add('hidden');
+      document.getElementById('btn-orphan-filter')?.click();
+    });
+
+    document.getElementById('mobile-btn-timeline')?.addEventListener('click', () => {
+      mobileSheet?.classList.add('hidden');
+      document.getElementById('btn-toggle-timeline')?.click();
+    });
+
+    document.getElementById('mobile-btn-export')?.addEventListener('click', () => {
+      mobileSheet?.classList.add('hidden');
+      document.getElementById('btn-export-png')?.click();
+    });
+
+    document.getElementById('mobile-btn-physics')?.addEventListener('click', () => {
+      mobileSheet?.classList.add('hidden');
+      this.physicsPanel?.classList.toggle('hidden');
+    });
+
+    document.getElementById('mobile-btn-gemini')?.addEventListener('click', () => {
+      mobileSheet?.classList.add('hidden');
+      document.getElementById('btn-gemini-settings')?.click();
+    });
+
+    document.getElementById('mobile-btn-reset')?.addEventListener('click', () => {
+      mobileSheet?.classList.add('hidden');
+      this.graphView.resetView();
+    });
+
+    document.getElementById('mobile-btn-lock')?.addEventListener('click', () => {
+      mobileSheet?.classList.add('hidden');
+      document.getElementById('btn-lock')?.click();
+    });
+
     // 필터
     this.folderSelect.addEventListener('change', () => this.handleFilterChange());
     this.tagSelect.addEventListener('change', () => this.handleFilterChange());
@@ -374,19 +467,27 @@ class App {
     }
 
     this.folderSelect.innerHTML = '<option value="">모든 폴더</option>';
+    const mobileFolder = document.getElementById('mobile-folder-filter');
+    if (mobileFolder) mobileFolder.innerHTML = '<option value="">모든 폴더</option>';
+
     Array.from(folders).sort().forEach(f => {
       const opt = document.createElement('option');
       opt.value = f;
       opt.textContent = `📁 ${f}`;
       this.folderSelect.appendChild(opt);
+      if (mobileFolder) mobileFolder.appendChild(opt.cloneNode(true));
     });
 
     this.tagSelect.innerHTML = '<option value="">모든 태그</option>';
+    const mobileTag = document.getElementById('mobile-tag-filter');
+    if (mobileTag) mobileTag.innerHTML = '<option value="">모든 태그</option>';
+
     Array.from(tags).sort().forEach(t => {
       const opt = document.createElement('option');
       opt.value = t;
       opt.textContent = `#${t}`;
       this.tagSelect.appendChild(opt);
+      if (mobileTag) mobileTag.appendChild(opt.cloneNode(true));
     });
   }
 

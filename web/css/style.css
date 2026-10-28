@@ -674,25 +674,218 @@ select.filter-select:hover {
   to { transform: rotate(360deg); }
 }
 
+/* 데스크톱 vs 모바일 분기 기본값 */
+.mobile-header-actions {
+  display: none;
+}
+
 @media (max-width: 768px) {
+  /* 상단 네비게이션: 모바일에서는 단 1줄로 컴팩트하게 정렬 */
   .top-nav {
-    flex-direction: column;
-    align-items: stretch;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .brand-section {
+    padding: 6px 10px;
     gap: 8px;
   }
-  .search-box input {
-    width: 120px;
+
+  .brand-title {
+    font-size: 13px;
   }
-  .search-box input:focus {
-    width: 160px;
+
+  .badge {
+    display: none; /* 모바일에서는 뱃지 숨김으로 공간 절약 */
   }
+
+  /* 데스크톱용 수많은 버튼 숨김 */
+  .desktop-only {
+    display: none !important;
+  }
+
+  /* 모바일용 헤더 버튼(검색, 햄버거 메뉴) 노출 */
+  .mobile-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: auto;
+  }
+
+  /* 모바일 드롭다운 검색 바 */
+  .mobile-search-bar {
+    position: absolute;
+    top: 54px;
+    left: 8px;
+    right: 8px;
+    background: var(--bg-card);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 6px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: var(--shadow-lg);
+    z-index: 20;
+    pointer-events: auto;
+    animation: slideDown 0.2s ease-out;
+  }
+
+  .mobile-search-bar.hidden {
+    display: none;
+  }
+
+  .mobile-search-bar input {
+    flex: 1;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 8px 12px;
+    font-size: 14px;
+    border-radius: var(--radius-sm);
+    outline: none;
+  }
+
+  /* 모바일 바텀시트 (Bottom Sheet) */
+  .mobile-tools-sheet {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.6);
+    padding: 12px 16px env(safe-area-inset-bottom, 16px);
+    z-index: 150;
+    transform: translateY(0);
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  .mobile-tools-sheet.hidden {
+    transform: translateY(110%);
+    pointer-events: none;
+  }
+
+  .sheet-handle {
+    width: 36px;
+    height: 4px;
+    background: var(--border-color-light);
+    border-radius: 2px;
+    margin: 0 auto 10px;
+  }
+
+  .sheet-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .sheet-header h4 {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .sheet-row {
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sheet-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    min-width: 60px;
+  }
+
+  .sheet-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .sheet-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 12px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s;
+  }
+
+  .sheet-btn:active {
+    background: var(--accent-glow);
+  }
+
+  .sheet-btn-icon {
+    font-size: 16px;
+  }
+
+  /* 사이드바 & 탐색기 모바일 전면 최적화 */
   #sidebar {
     width: 100%;
+    max-width: 100vw;
     top: 0;
     bottom: 0;
     right: 0;
     border-radius: 0;
+    border: none;
+    z-index: 100;
   }
+
+  .explorer-sidebar {
+    width: 100%;
+    max-width: 100vw;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    border-radius: 0;
+    border: none;
+    z-index: 100;
+  }
+
+  /* 하단 HUD 모바일 컴팩트화 */
+  .graph-hud {
+    bottom: 10px;
+    left: 10px;
+    padding: 4px 8px;
+    font-size: 10px;
+    gap: 8px;
+  }
+
+  /* 타임라인 바 모바일 폭 맞춤 */
+  .timeline-player {
+    bottom: 10px;
+    width: 95%;
+    padding: 6px 12px;
+    gap: 8px;
+  }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* ───── 좌측 파일 탐색기 드로어 ───── */

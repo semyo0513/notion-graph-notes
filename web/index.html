@@ -31,56 +31,138 @@
         <span class="badge" title="전체 노트 수"><span id="node-count">0</span> Notes</span>
       </div>
 
-      <div class="controls-section">
-        <!-- 검색창 (중앙 집중 정렬) -->
-        <div class="search-box">
-          <input type="text" id="search-input" placeholder="검색 (중앙 집중)..." autocomplete="off">
-          <button id="search-clear" class="search-clear" title="검색 지우기">✕</button>
+        <!-- 모바일 전용 헤더 컨트롤러 -->
+        <div class="mobile-header-actions">
+          <button id="btn-mobile-search-toggle" class="btn-icon" title="검색 열기/닫기">🔍</button>
+          <button id="btn-mobile-menu" class="btn-icon" title="도구 메뉴 열기">☰</button>
         </div>
 
-        <!-- 폴더 & 태그 필터 -->
-        <select id="folder-filter" class="filter-select">
-          <option value="">모든 폴더</option>
-        </select>
+        <!-- 데스크톱용 컨트롤 섹션 (모바일에서는 바텀시트로 대체) -->
+        <div class="controls-section desktop-only">
+          <!-- 검색창 (중앙 집중 정렬) -->
+          <div class="search-box">
+            <input type="text" id="search-input" placeholder="검색 (중앙 집중)..." autocomplete="off">
+            <button id="search-clear" class="search-clear" title="검색 지우기">✕</button>
+          </div>
 
-        <select id="tag-filter" class="filter-select">
-          <option value="">모든 태그</option>
-        </select>
+          <!-- 폴더 & 태그 필터 -->
+          <select id="folder-filter" class="filter-select">
+            <option value="">모든 폴더</option>
+          </select>
 
-        <!-- 색상 테마 모드 셀렉트 -->
-        <select id="color-mode-select" class="filter-select" title="노드 색상 기준">
-          <option value="folder">🎨 폴더별 색상</option>
-          <option value="tag">🏷️ 태그별 색상</option>
-          <option value="heatmap">🔥 수정일 히트맵</option>
-          <option value="hub">⭐ 지식 허브 (연결수)</option>
-        </select>
+          <select id="tag-filter" class="filter-select">
+            <option value="">모든 태그</option>
+          </select>
 
-        <!-- 3D / 2D 우주 모드 전환 버튼 -->
-        <button id="btn-toggle-3d" class="btn-icon" title="3D 우주 은하 모드 전환">🌐</button>
+          <!-- 색상 테마 모드 셀렉트 -->
+          <select id="color-mode-select" class="filter-select" title="노드 색상 기준">
+            <option value="folder">🎨 폴더별 색상</option>
+            <option value="tag">🏷️ 태그별 색상</option>
+            <option value="heatmap">🔥 수정일 히트맵</option>
+            <option value="hub">⭐ 지식 허브 (연결수)</option>
+          </select>
 
-        <!-- 고아 노트(Orphan) 발굴 필터 -->
-        <button id="btn-orphan-filter" class="btn-icon" title="고아 노트(외로운 노트)만 보기">🔍</button>
+          <!-- 3D / 2D 우주 모드 전환 버튼 -->
+          <button id="btn-toggle-3d" class="btn-icon" title="3D 우주 은하 모드 전환">🌐</button>
 
-        <!-- 타임라인 시간여행 토글 -->
-        <button id="btn-toggle-timeline" class="btn-icon" title="시간 여행 타임랩스 열기/닫기">⏳</button>
+          <!-- 고아 노트(Orphan) 발굴 필터 -->
+          <button id="btn-orphan-filter" class="btn-icon" title="고아 노트(외로운 노트)만 보기">🔍</button>
 
-        <!-- 고해상도 PNG 캡처 내보내기 -->
-        <button id="btn-export-png" class="btn-icon" title="고해상도 이미지 내보내기 (PNG)">📸</button>
+          <!-- 타임라인 시간여행 토글 -->
+          <button id="btn-toggle-timeline" class="btn-icon" title="시간 여행 타임랩스 열기/닫기">⏳</button>
 
-        <!-- 물리 엔진 제어 패널 버튼 -->
-        <button id="btn-toggle-physics" class="btn-icon" title="물리 엔진 장력/파티클 설정">🎨</button>
+          <!-- 고해상도 PNG 캡처 내보내기 -->
+          <button id="btn-export-png" class="btn-icon" title="고해상도 이미지 내보내기 (PNG)">📸</button>
 
-        <!-- Gemini AI 설정 버튼 -->
-        <button id="btn-gemini-settings" class="btn-icon" title="Gemini AI 지식 비서 설정">🤖</button>
+          <!-- 물리 엔진 제어 패널 버튼 -->
+          <button id="btn-toggle-physics" class="btn-icon" title="물리 엔진 장력/파티클 설정">🎨</button>
 
-        <!-- 줌 컨트롤 -->
-        <button id="btn-zoom-in" class="btn-icon" title="확대">+</button>
-        <button id="btn-zoom-out" class="btn-icon" title="축소">−</button>
-        <button id="btn-reset-view" class="btn-icon" title="화면 중앙 맞춤">⊙</button>
+          <!-- Gemini AI 설정 버튼 -->
+          <button id="btn-gemini-settings" class="btn-icon" title="Gemini AI 지식 비서 설정">🤖</button>
 
-        <!-- 잠금(로그아웃) -->
-        <button id="btn-lock" class="btn-icon" title="다시 잠그기 (로그아웃)">🔒</button>
+          <!-- 줌 컨트롤 -->
+          <button id="btn-zoom-in" class="btn-icon" title="확대">+</button>
+          <button id="btn-zoom-out" class="btn-icon" title="축소">−</button>
+          <button id="btn-reset-view" class="btn-icon" title="화면 중앙 맞춤">⊙</button>
+
+          <!-- 잠금(로그아웃) -->
+          <button id="btn-lock" class="btn-icon" title="다시 잠그기 (로그아웃)">🔒</button>
+        </div>
       </div>
+    </nav>
+
+    <!-- 모바일 드롭다운 검색 바 (모바일 검색 버튼 클릭 시 노출) -->
+    <div id="mobile-search-bar" class="mobile-search-bar hidden">
+      <input type="text" id="mobile-search-input" placeholder="노트 제목, 내용, 태그 검색..." autocomplete="off">
+      <button id="mobile-search-clear" class="btn-icon" style="border:none;">✕</button>
+    </div>
+
+    <!-- 모바일 전용 도구 바텀시트 (Bottom Sheet Drawer) -->
+    <div id="mobile-tools-sheet" class="mobile-tools-sheet hidden">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h4>그래프 탐색 & 도구</h4>
+        <button id="btn-close-sheet" class="modal-close-btn">✕</button>
+      </div>
+
+      <div class="sheet-content">
+        <!-- 필터 섹션 -->
+        <div class="sheet-row">
+          <label class="sheet-label">색상 테마:</label>
+          <select id="mobile-color-select" class="filter-select" style="flex:1;">
+            <option value="folder">🎨 폴더별 색상</option>
+            <option value="tag">🏷️ 태그별 색상</option>
+            <option value="heatmap">🔥 수정일 히트맵</option>
+            <option value="hub">⭐ 지식 허브 (연결수)</option>
+          </select>
+        </div>
+
+        <div class="sheet-row" style="display:flex; gap:8px;">
+          <select id="mobile-folder-filter" class="filter-select" style="flex:1;">
+            <option value="">모든 폴더</option>
+          </select>
+          <select id="mobile-tag-filter" class="filter-select" style="flex:1;">
+            <option value="">모든 태그</option>
+          </select>
+        </div>
+
+        <!-- 퀵 액션 그리드 -->
+        <div class="sheet-grid">
+          <button id="mobile-btn-3d" class="sheet-btn">
+            <span class="sheet-btn-icon">🌐</span>
+            <span>3D 우주 모드</span>
+          </button>
+          <button id="mobile-btn-orphan" class="sheet-btn">
+            <span class="sheet-btn-icon">🔍</span>
+            <span>고아 노트 찾기</span>
+          </button>
+          <button id="mobile-btn-timeline" class="sheet-btn">
+            <span class="sheet-btn-icon">⏳</span>
+            <span>시간 여행</span>
+          </button>
+          <button id="mobile-btn-export" class="sheet-btn">
+            <span class="sheet-btn-icon">📸</span>
+            <span>이미지 저장</span>
+          </button>
+          <button id="mobile-btn-physics" class="sheet-btn">
+            <span class="sheet-btn-icon">🎨</span>
+            <span>장력/물리 설정</span>
+          </button>
+          <button id="mobile-btn-gemini" class="sheet-btn">
+            <span class="sheet-btn-icon">🤖</span>
+            <span>Gemini AI 설정</span>
+          </button>
+          <button id="mobile-btn-reset" class="sheet-btn">
+            <span class="sheet-btn-icon">⊙</span>
+            <span>화면 중앙 맞춤</span>
+          </button>
+          <button id="mobile-btn-lock" class="sheet-btn" style="color:var(--danger-color);">
+            <span class="sheet-btn-icon">🔒</span>
+            <span>앱 잠그기</span>
+          </button>
+        </div>
+      </div>
+    </div>
     </nav>
 
     <!-- 좌측 파일/노트 탐색기 드로어 -->
@@ -264,6 +346,6 @@
     <div id="toast-container" class="toast-container"></div>
   </div>
 
-  <script type="module" src="js/app.js?v=20261028_5"></script>
+  <script type="module" src="js/app.js?v=20261028_6"></script>
 </body>
 </html>
