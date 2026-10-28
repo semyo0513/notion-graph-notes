@@ -1,110 +1,58 @@
-# Notion × 그래프뷰 노트 웹앱 (클라이언트 로컬 직접 입력판)
+# Notion × 그래프뷰 노트 웹앱 (프록시 불필요 · 완전 암호화판)
 
 > 노션(Notion) 데이터베이스의 노트를 옵시디언(Obsidian) 스타일의 인터랙티브 지식 그래프로 시각화하고 열람하는 웹 애플리케이션입니다.  
-> **GitHub 저장소와 서버에는 순수 웹앱 뷰어 코드만 올라가며, 어떠한 노션 데이터나 API 키도 저장되지 않습니다.**  
-> 모든 토큰과 DB 정보는 **접속한 사용자 본인의 웹 브라우저(LocalStorage)**에만 보관되므로, 깃허브가 완전 공개(Public) 상태여도 개인정보가 100% 안전하게 보호됩니다.
+> **CORS 프록시나 외부 서버가 전혀 필요 없으며, GitHub Actions를 통해 오직 Notion 공식 API와 직접 통신합니다.**  
+> 모든 노트 데이터는 **AES-256-GCM**으로 완전 암호화되어 배포되므로, 깃허브 저장소가 공개(Public) 상태여도 개인정보가 100% 안전하게 보호됩니다.
 
 ---
 
-## 🔒 작동 원리 및 보안 장점
+## 🔒 작동 구조 (프록시 0개)
 
 ```
-[GitHub Pages 배포 웹앱]
-       │ (순수 HTML/JS/CSS 뷰어 엔진만 서빙, 저장소에 노션 데이터 0바이트)
+[Notion API]
+       │ (CORS 제약이 없는 GitHub Actions 서버 환경에서 직접 통신)
        ▼
+[GitHub Actions (scripts/sync.mjs)]
+       │
+       ├─ Notion API 직접 조회 (토큰은 GitHub Secrets에만 안전하게 보관)
+       ├─ 노트 본문 & 관계망 수집 → gzip 압축 → AES-256-GCM 암호화
+       ▼
+[GitHub Pages 정적 사이트]
+       │
+       ▼ (웹 접속)
 [사용자 웹 브라우저]
-       ├─ 사용자 본인의 Notion API Key & DB ID 직접 입력 (브라우저 로컬 저장소에만 보관)
-       ├─ 실시간으로 Notion API 직접 호출 (CORS 프록시 경유)
-       ├─ 브라우저 메모리 상에서 실시간 그래프 구성 & IndexedDB 로컬 캐싱
-       └─ 노션에서 내용 수정 후 '동기화(🔄)' 누르면 즉시 실시간 반영!
+       └─ 프록시 입력 전혀 없이, 설정한 '패스프레이즈(비밀번호)'만 입력하면 즉시 복호화되어 열람!
 ```
 
-### 왜 이 방식이 가장 안전한가요?
-1. **GitHub 저장소 데이터 제로**: 깃허브 저장소나 Pages 서버에 노션 노트 파일이 아예 배포되지 않으므로, 저장소가 공개되어 있어도 노출될 데이터 자체가 없습니다.
-2. **실시간 반영**: GitHub Actions 정기 빌드를 기다릴 필요 없이, 노션에서 수정한 내용을 웹앱에서 즉시 실시간으로 확인할 수 있습니다.
-3. **다중 사용자 지원**: 같은 웹앱 주소로 다른 사람(동료/친구)이 접속해도, 각자 자신의 노션 API 키를 입력하여 각자의 지식 그래프를 독립적으로 볼 수 있습니다.
+---
+
+## 🚀 3분 배포 가이드
+
+### 1단계: 노션 데이터베이스 준비
+1. 노션 설정 → [통합(Integrations)](https://www.notion.so/profile/integrations)에서 새 내부 통합을 생성하고 **API 토큰 (`ntn_...` 또는 `secret_...`)**을 발급받습니다.
+2. 그래프로 볼 **노션 데이터베이스 페이지**로 이동합니다.
+3. **[가장 중요]** 페이지 우측 상단 **`···`** 클릭 ➔ **`연결(Connections)`** ➔ 생성한 통합 봇을 반드시 추가합니다.
+4. 해당 노션 DB의 웹 주소 URL(또는 ID)을 복사합니다. (예: `https://app.notion.com/p/...`)
 
 ---
 
-## 📋 1. Notion 준비 사항
+### 2단계: GitHub Secrets 3개 등록
+저장소의 **Settings** ➔ **Secrets and variables** ➔ **Actions** ➔ **New repository secret**에서 다음 3가지를 등록합니다:
 
-노션에 데이터베이스를 1개 생성하고 아래 속성명을 **동일하게** 생성해 주세요:
-
-| 속성명 | 타입 | 설명 |
-|---|---|---|
-| **`이름`** | Title | 노트 제목 (그래프 노드 라벨) |
-| **`연결`** | Relation | **자기 자신 DB를 참조**하는 관계형 속성 (노트 간 연결선) |
-| **`태그`** | Multi-select | 태그 필터 및 분류 |
-| **`폴더`** | Select | 범주 분류 (노드 고유 색상 매핑) |
-| **`요약`** | Text (선택) | 검색 및 사이드바 미리보기 |
-
-> **노션 설정 팁**:
-> 1. 노션 설정 → [통합(Integrations)](https://www.notion.so/profile/integrations)에서 새 내부 통합을 생성하여 `API 토큰 (secret_...)`을 발급받습니다.
-> 2. 해당 노션 DB 페이지 우측 상단 `···` → `연결(Connections)`에서 생성한 통합을 추가합니다. (**필수**)
-> 3. DB 페이지 설정에서 *Manage data sources* → *Copy data source ID*를 복사합니다. (또는 DB URL의 32자리 ID)
+| 시크릿 이름 (Name) | 내용 (Secret) |
+|---|---|
+| `NOTION_TOKEN` | 노션 API 토큰 (`ntn_...` 또는 `secret_...`) |
+| `DATA_SOURCE_ID` | 노션 DB URL (`https://app.notion.com/p/...` 전체 그대로 붙여넣어도 자동 처리됨) |
+| `DATA_PASSPHRASE` | 웹 접속 시 입력할 **비밀번호** (16자 이상 안전한 문장 권장) |
 
 ---
 
-## 🚀 2. 웹앱 사용 방법
+### 3단계: GitHub Pages 활성화 및 최초 동기화
+1. 저장소의 **Settings** ➔ **Pages**로 이동합니다.
+2. **Build and deployment** ➔ **Source**를 `GitHub Actions`로 선택합니다.
+3. 저장소 상단의 **Actions** 탭으로 이동합니다.
+4. 좌측의 **`sync-deploy`** 워크플로를 클릭 ➔ 우측의 **`Run workflow`** 버튼을 누릅니다.
+5. 1~2분 뒤 빌드가 완료되면 배포된 주소(`https://semyo0513.github.io/notion-graph-notes/`)로 접속합니다.
+6. 등록하신 `DATA_PASSPHRASE` 비밀번호를 입력하면 바로 지식 그래프가 펼쳐집니다!
 
-1. 배포된 웹앱 주소(`https://semyo0513.github.io/notion-graph-notes/`)에 접속합니다.
-2. 화면 중앙의 **Notion 연결 설정** 창에 발급받은 정보를 입력합니다:
-   - **Notion API 토큰**: `secret_...`
-   - **데이터베이스 ID**: 복사한 32자리 ID
-   - **CORS 프록시 주소**: 기본값(`https://corsproxy.io/?url=`) 그대로 사용 가능
-3. **[설정 저장 및 노션 동기화]**를 누르면 즉시 노션의 모든 노트가 2D 인터랙티브 그래프로 로드됩니다!
-
----
-
-## 🌐 3. (선택) 나만의 개인 CORS 프록시 만들기 (Cloudflare Workers)
-
-기본으로 제공되는 `https://corsproxy.io/?url=` 외에, **완전한 나만의 전용 프록시**를 원하신다면 Cloudflare Workers(무료)를 이용해 1분 만에 구축할 수 있습니다.
-
-1. [Cloudflare 대시보드](https://dash.cloudflare.com/)에 로그인 후 **Workers & Pages** → **Create application** 클릭
-2. 아래 코드를 붙여넣고 저장 및 배포(Deploy)합니다:
-```javascript
-export default {
-  async fetch(request) {
-    const url = new URL(request.url);
-    const targetUrl = url.searchParams.get('url');
-    if (!targetUrl) return new Response('Missing ?url=', { status: 400 });
-
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': '*'
-        }
-      });
-    }
-
-    const modifiedRequest = new Request(targetUrl, {
-      method: request.method,
-      headers: request.headers,
-      body: request.body
-    });
-
-    const response = await fetch(modifiedRequest);
-    const newHeaders = new Headers(response.headers);
-    newHeaders.set('Access-Control-Allow-Origin', '*');
-
-    return new Response(response.body, {
-      status: response.status,
-      headers: newHeaders
-    });
-  }
-};
-```
-3. 생성된 Worker 주소(예: `https://my-proxy.workers.dev/?url=`)를 웹앱의 설정창에 입력하시면 됩니다.
-
----
-
-## 💻 4. 로컬 테스트 방법
-
-```bash
-# 로컬 개발 서버 실행
-npm start
-```
-- 브라우저에서 `http://localhost:8080`에 접속하여 테스트할 수 있습니다.
-- 토큰이 없더라도 **[토큰 없이 데모 둘러보기]** 버튼을 누르면 내장된 샘플 지식 그래프를 즉시 체험할 수 있습니다.
+> **자동 동기화**: 이후 노션에서 내용을 수정하시면 30분마다 GitHub Actions가 자동으로 변경사항을 감지하여 암호화 배포합니다. (즉시 반영하고 싶을 때는 Actions 탭에서 `Run workflow` 클릭)
