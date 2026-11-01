@@ -80,7 +80,50 @@ async function notion(method, path, body) {
   throw new Error('Notion API 요청 실패 (최대 재시도 초과)');
 }
 
-/* ───── 스마트 자동 탐색: 워크스페이스 검증 및 DB 자동 매칭 ───── */
+/* ───── 데이터 소스 쿼리 테스트 (정상 여부 및 행 개수 체크) ───── */
+async function testDataSource(dsId) {
+  if (!dsId) return { ok: false, count: 0 };
+  const cleanId = dsId.replace(/-/g, '');
+  try {
+    const res = await notion('POST', `/data_sources/${cleanId}/query`, { page_size: 5 });
+    const count = Array.isArray(res.results) ? res.results.length : 0;
+    return { ok: true, count, hasMore: Boolean(res.has_more) };
+  } catch (err) {
+    return { ok: false, count: 0, error: err.details || err.message };
+  }
+}
+
+/* ───── Database ID -> Data Source ID 해석 ───── */
+async function resolveDbToDataSource(dbId) {
+  try {
+    const cleanId = dbId.replace(/-/g, '');
+    const dbObj = await notion('GET', `/databases/${cleanId}`);
+    if (Array.isArray(dbObj.data_sources) && dbObj.data_sources.length > 0) {
+      return dbObj.data_sources[0].id.replace(/-/g, '');
+    }
+    return cleanId;
+  } catch {
+    return dbId.replace(/-/g, '');
+  }
+}
+
+/* ───── Page ID 내 하위 자식 DB 탐색 ───── */
+async function findChildDatabaseInPage(pageId) {
+  try {
+    const cleanId = pageId.replace(/-/g, '');
+    const blocks = await notion('GET', `/blocks/${cleanId}/children?page_size=50`);
+    for (const b of blocks.results || []) {
+      if (b.type === 'child_database') {
+        const childId = b.id.replace(/-/g, '');
+        console.log(`  ✓ 페이지 내 자식 데이터베이스 발견: [${b.child_database?.title || '제목 없음'}] (ID: ${childId})`);
+        return await resolveDbToDataSource(childId);
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/* ───── 스마트 탐색: 사용자 입력 ID 최우선 매칭 및 자가 복구 ───── */
 async function resolveDataSourceId() {
   console.log('\n=== [2/4] Notion 통합 봇 및 워크스페이스 진단 ===');
 
@@ -97,7 +140,7 @@ async function resolveDataSourceId() {
     throw err;
   }
 
-  // 2. 통합 봇에게 공유된 모든 노션 항목 전체 검색 (바디 {} 로 100% 호환)
+  // 2. 통합 봇에게 공유된 노션 항목 검색
   let accessibleItems = [];
   try {
     const searchRes = await notion('POST', '/search', {});
@@ -110,7 +153,7 @@ async function resolveDataSourceId() {
     } catch {}
   }
 
-  console.log(`\n• 현재 봇 "${botInfo.name}" 에게 연결된 노션 페이지/DB: 총 ${accessibleItems.length}개 발견`);
+  console.log(`\n• 현재 봇 "${botInfo.name}" 에게 연결된 노션 항목: 총 ${accessibleItems.length}개 발견`);
   for (const item of accessibleItems) {
     const objType = item.object;
     let title = '(제목 없음)';
@@ -128,89 +171,120 @@ async function resolveDataSourceId() {
     console.log(`  - [${objType}] "${title}" (ID: ${cleanId})`);
   }
 
-  // 3. 만약 공유된 항목 중 data_source가 있으면 최우선 연결
-  const dsItem = accessibleItems.find(i => i.object === 'data_source');
-  if (dsItem) {
-    const dsId = dsItem.id.replace(/-/g, '');
-    console.log(`\n🎉 [자동 매칭 성공] 발견된 Data Source ID(${dsId})로 자동 연결합니다!`);
-    return dsId;
-  }
-
-  // 4. database 항목이 있으면 연결
-  const dbItem = accessibleItems.find(i => i.object === 'database');
-  if (dbItem) {
-    console.log(`\n🎉 [자동 매칭 성공] 발견된 Database(ID: ${dbItem.id})로 자동 연결합니다!`);
-    return await resolveDbToDataSource(dbItem.id);
-  }
-
-  // 5. 사용자가 입력한 RAW_ID 직접 조회 시도 (GET /databases, GET /pages)
+  // 3. [최우선] 사용자가 DATA_SOURCE_ID를 명시한 경우: 해당 ID를 철저히 검증 및 도출
   if (RAW_ID) {
-    console.log(`\n• 입력된 ID(${RAW_ID}) 직접 조회 시도 중...`);
+    console.log(`\n• [1순위 검증] 사용자가 입력한 DATA_SOURCE_ID(${RAW_ID}) 분석 중...`);
+
+    // (A) 입력된 ID가 곧바로 data_source ID인지 테스트
+    const directDsTest = await testDataSource(RAW_ID);
+    if (directDsTest.ok) {
+      console.log(`🎉 [매칭 성공] 입력된 ID는 유효한 Data Source ID입니다! (발견된 샘플 노트: ${directDsTest.count}개)`);
+      return RAW_ID;
+    }
+
+    // (B) 입력된 ID가 database ID인지 확인 -> data_sources 추출
     try {
       const dbObj = await notion('GET', `/databases/${RAW_ID}`);
-      console.log(`✓ 입력된 ID로 Database 직접 조회 성공! (${dbObj.title?.map(t => t.plain_text).join('')})`);
-      return await resolveDbToDataSource(RAW_ID);
-    } catch (e1) {
-      console.log(`  - databases/${RAW_ID} 조회 실패: ${e1.details || e1.message}`);
+      const title = (dbObj.title || []).map(t => t.plain_text).join('') || '이름 없음';
+      console.log(`✓ 입력된 ID로 Database 컨테이너 조회 성공: "${title}"`);
+      if (Array.isArray(dbObj.data_sources) && dbObj.data_sources.length > 0) {
+        const derivedDsId = dbObj.data_sources[0].id.replace(/-/g, '');
+        console.log(`🎉 [매칭 성공] Database 컨테이너 내의 Data Source ID(${derivedDsId})를 획득했습니다!`);
+        return derivedDsId;
+      }
+      return RAW_ID;
+    } catch (eDb) {
+      console.log(`  - Database 직접 조회 불가: ${eDb.details || eDb.message}`);
     }
 
+    // (C) 입력된 ID가 page ID인지 확인 -> 하위 child_database 탐색
     try {
       const pageObj = await notion('GET', `/pages/${RAW_ID}`);
-      console.log(`✓ 입력된 ID는 페이지입니다. 페이지 내부 데이터베이스를 탐색합니다...`);
+      console.log(`✓ 입력된 ID는 Page입니다. 페이지 내부 데이터베이스를 탐색합니다...`);
       const childDs = await findChildDatabaseInPage(RAW_ID);
-      if (childDs) return childDs;
-    } catch (e2) {
-      console.log(`  - pages/${RAW_ID} 조회 실패: ${e2.details || e2.message}`);
+      if (childDs) {
+        console.log(`🎉 [매칭 성공] Page 내부 자식 데이터베이스 Data Source ID(${childDs}) 도출 완료!`);
+        return childDs;
+      }
+    } catch (ePg) {
+      console.log(`  - Page 직접 조회 불가: ${ePg.details || ePg.message}`);
     }
-  }
 
-  // 6. 페이지 항목들이 있다면 페이지 내부 탐색
-  const pageItems = accessibleItems.filter(i => i.object === 'page');
-  for (const page of pageItems) {
-    const childDs = await findChildDatabaseInPage(page.id);
-    if (childDs) {
-      console.log(`\n🎉 [자동 매칭 성공] 페이지 [${page.id}] 내부의 데이터베이스로 자동 연결합니다!`);
-      return childDs;
-    }
-  }
-
-  // 7. 여기까지 왔는데 아무것도 없다면 -> 안내 메시지 출력
-  const ws = botInfo.bot?.owner?.workspace_name || '(소속 워크스페이스)';
-  throw new Error(
-    `통합 봇 "${botInfo.name}" 에게 공유된 데이터베이스가 0개입니다.\n\n` +
-    `[가장 중요한 점검 사항]\n` +
-    `현재 토큰은 [${ws}] 워크스페이스에 연결되어 있습니다.\n` +
-    `노션 화면 좌측 상단에서 현재 열려 있는 워크스페이스 이름이 [${ws}] 가 맞는지 꼭 확인하세요!\n` +
-    `(노션 계정에 여러 워크스페이스가 있는 경우, 다른 워크스페이스의 데이터베이스에 추가하면 API가 찾지 못합니다.)`
-  );
-}
-
-async function resolveDbToDataSource(dbId) {
-  try {
-    const cleanId = dbId.replace(/-/g, '');
-    const dbObj = await notion('GET', `/databases/${cleanId}`);
-    if (Array.isArray(dbObj.data_sources) && dbObj.data_sources.length > 0) {
-      return dbObj.data_sources[0].id.replace(/-/g, '');
-    }
-    return cleanId;
-  } catch {
-    return dbId.replace(/-/g, '');
-  }
-}
-
-async function findChildDatabaseInPage(pageId) {
-  try {
-    const cleanId = pageId.replace(/-/g, '');
-    const blocks = await notion('GET', `/blocks/${cleanId}/children?page_size=50`);
-    for (const b of blocks.results || []) {
-      if (b.type === 'child_database') {
-        const childId = b.id.replace(/-/g, '');
-        console.log(`  ✓ 페이지 내에서 자식 데이터베이스 블록 발견: [${b.child_database?.title}] (ID: ${childId})`);
-        return await resolveDbToDataSource(childId);
+    // (D) accessibleItems 목록에서 RAW_ID와 매칭되는 항목 확인
+    const matchedItem = accessibleItems.find(i => i.id.replace(/-/g, '').toLowerCase() === RAW_ID.toLowerCase());
+    if (matchedItem) {
+      console.log(`✓ 봇 검색 결과에서 입력 ID와 일치하는 [${matchedItem.object}] 발견!`);
+      if (matchedItem.object === 'data_source') return matchedItem.id.replace(/-/g, '');
+      if (matchedItem.object === 'database') return await resolveDbToDataSource(matchedItem.id);
+      if (matchedItem.object === 'page') {
+        const childDs = await findChildDatabaseInPage(matchedItem.id);
+        if (childDs) return childDs;
       }
     }
-  } catch {}
-  return null;
+  }
+
+  // 4. [2순위 자동 탐색 Fallback] 사용자가 ID를 입력하지 않았거나, 위 검증에서 매칭되지 않은 경우
+  console.log(`\n• [2순위 자동 탐색] 워크스페이스 내 최적의 데이터 소스 후보를 탐색합니다...`);
+
+  // 가능한 모든 Data Source 후보 수집
+  const candidates = [];
+
+  for (const item of accessibleItems) {
+    const cleanId = item.id.replace(/-/g, '');
+    let title = item.title?.map?.(t => t.plain_text).join('') || item.object;
+
+    if (item.object === 'data_source') {
+      candidates.push({ id: cleanId, title, source: 'data_source' });
+    } else if (item.object === 'database') {
+      const dsId = await resolveDbToDataSource(cleanId);
+      candidates.push({ id: dsId, title, source: 'database' });
+    } else if (item.object === 'page') {
+      const childDs = await findChildDatabaseInPage(cleanId);
+      if (childDs) {
+        candidates.push({ id: childDs, title: `(Page ${cleanId} 하위 DB)`, source: 'child_database' });
+      }
+    }
+  }
+
+  // 중복 ID 제거
+  const uniqueCandidates = [];
+  const seenIds = new Set();
+  for (const c of candidates) {
+    if (!seenIds.has(c.id)) {
+      seenIds.add(c.id);
+      uniqueCandidates.push(c);
+    }
+  }
+
+  console.log(`• 발견된 데이터 소스 후보군: ${uniqueCandidates.length}개`);
+
+  // 각 후보의 실제 노트(row) 개수 검사하여 데이터가 있는 소스를 최우선 선택
+  let bestCandidate = null;
+  for (const c of uniqueCandidates) {
+    const test = await testDataSource(c.id);
+    console.log(`  - 후보 [${c.source}] "${c.title}" (ID: ${c.id}) -> 유효: ${test.ok}, 샘플 노트: ${test.count}개`);
+    if (test.ok && test.count > 0) {
+      bestCandidate = c.id;
+      console.log(`🎉 [자동 매칭 성공] 노트가 존재하는 데이터 소스(${c.id})를 최우선 선택합니다!`);
+      return bestCandidate;
+    }
+  }
+
+  if (uniqueCandidates.length > 0) {
+    const fallbackId = uniqueCandidates[0].id;
+    console.log(`⚠️ 노트가 있는 데이터 소스를 찾지 못하여 첫 번째 후보(${fallbackId})를 선택합니다.`);
+    return fallbackId;
+  }
+
+  // 5. 아무것도 발견되지 않은 경우
+  const ws = botInfo.bot?.owner?.workspace_name || '(소속 워크스페이스)';
+  throw new Error(
+    `통합 봇 "${botInfo.name}" 에게 공유된 유효한 데이터베이스 또는 데이터 소스를 찾을 수 없습니다.\n\n` +
+    `[점검 사항]\n` +
+    `1. 현재 토큰의 소속 워크스페이스: [${ws}]\n` +
+    `2. 노션 웹 화면에서 대상 데이터베이스 우측 상단 [···] -> [연결(Connections)]에 "${botInfo.name}" 봇이 추가되어 있는지 확인하세요.\n` +
+    `3. 데이터베이스 제목 우측 [···] -> [데이터 소스 관리] -> [데이터 소스 ID 복사]를 눌러 GitHub Secret에 DATA_SOURCE_ID를 업데이트해 주세요.`
+  );
 }
 
 /* ───── 암호화 유틸 ───── */
@@ -246,13 +320,22 @@ async function open(key, buf) {
 async function queryAll(targetId) {
   const nodes = [];
   let cursor = null;
+  let activeId = targetId.replace(/-/g, '');
 
-  let endpoint = `/data_sources/${targetId}/query`;
+  // 1차로 /data_sources/:id/query 테스트, 실패 시 DB에서 data_source ID 재추출
   try {
-    await notion('POST', endpoint, { page_size: 1 });
+    await notion('POST', `/data_sources/${activeId}/query`, { page_size: 1 });
   } catch (err) {
-    endpoint = `/databases/${targetId}/query`;
+    console.log(`• data_sources/${activeId}/query 호출 실패 (${err.details || err.message}). Database 컨테이너 조회로 data_sources 재탐색...`);
+    const resolved = await resolveDbToDataSource(activeId);
+    if (resolved && resolved !== activeId) {
+      console.log(`  -> 추출된 Data Source ID(${resolved})로 전환합니다.`);
+      activeId = resolved;
+    }
   }
+
+  const endpoint = `/data_sources/${activeId}/query`;
+  console.log(`• 쿼리 대상 엔드포인트: POST ${endpoint}`);
 
   do {
     const r = await notion('POST', endpoint, {
@@ -439,15 +522,22 @@ async function main() {
   try {
     const prevBuf = await fs.readFile(`${OUT}/graph.enc`);
     const prevGraph = JSON.parse(await open(key, prevBuf));
-    prev = new Map(prevGraph.nodes.map(n => [n.id, n.edited]));
+    prev = new Map((prevGraph.nodes || []).map(n => [n.id, n.edited]));
     console.log(`• 이전 캐시 복호화 성공: ${prev.size}개 노트 캐시됨`);
   } catch {
     console.log(`• 신규 빌드 (전체 동기화 시작)`);
   }
 
   console.log(`\n=== [4/4] 노션 노트 및 본문 수집 시작 ===`);
-  const nodes = await queryAll(targetId);
-  console.log(`• 노션 전체 노트 수: ${nodes.length}개 발견`);
+  let nodes = await queryAll(targetId);
+  console.log(`• 쿼리 결과: ${nodes.length}개 노트 수집됨 (타겟 ID: ${targetId})`);
+
+  // [0건 방어 안전장치]: 만약 0개가 반환되었는데 이전 캐시가 있다면 이전 데이터 유실 방지
+  if (nodes.length === 0 && prev.size > 0) {
+    console.warn(`\n⚠️ [주의]: 노션에서 0개의 노트가 반환되었습니다!`);
+    console.warn(`• 데이터 유실 방지를 위해 이전 캐시(${prev.size}개 노트)를 보존하고 빌드를 유지합니다.`);
+    console.warn(`• 노션 데이터베이스에 실제 페이지가 있는지, 혹은 통합 봇 권한을 확인해 주세요.`);
+  }
 
   let fetched = 0;
   for (const n of nodes) {
@@ -460,10 +550,12 @@ async function main() {
     await sleep(340);
   }
 
-  const liveIds = new Set(nodes.map(n => `${n.id}.enc`));
-  const existingFiles = await fs.readdir(`${OUT}/n`);
-  for (const f of existingFiles) {
-    if (!liveIds.has(f)) await fs.unlink(`${OUT}/n/${f}`);
+  if (nodes.length > 0) {
+    const liveIds = new Set(nodes.map(n => `${n.id}.enc`));
+    const existingFiles = await fs.readdir(`${OUT}/n`);
+    for (const f of existingFiles) {
+      if (!liveIds.has(f)) await fs.unlink(`${OUT}/n/${f}`);
+    }
   }
 
   // 본문 텍스트 수집 및 검색 색인 생성
@@ -495,14 +587,18 @@ async function main() {
   console.log(`• 내용 및 관계망 기반 연결선(Edges): 총 ${edges.length}개 생성됨`);
 
   const slimNodes = nodes.map(({ links, summary, ...rest }) => rest);
-  await fs.writeFile(`${OUT}/graph.enc`, await seal(key, JSON.stringify({ nodes: slimNodes, edges })));
-  await fs.writeFile(`${OUT}/search.enc`, await seal(key, JSON.stringify(searchIndex)));
-  await fs.writeFile(`${OUT}/meta.json`, JSON.stringify({
-    v: 1,
-    salt: b64(salt),
-    iter: ITER,
-    builtAt: new Date().toISOString()
-  }));
+
+  // nodes가 0개인데 이전 캐시가 있다면 이전 암호화 파일들을 덮어쓰지 않음
+  if (nodes.length > 0 || prev.size === 0) {
+    await fs.writeFile(`${OUT}/graph.enc`, await seal(key, JSON.stringify({ nodes: slimNodes, edges })));
+    await fs.writeFile(`${OUT}/search.enc`, await seal(key, JSON.stringify(searchIndex)));
+    await fs.writeFile(`${OUT}/meta.json`, JSON.stringify({
+      v: 1,
+      salt: b64(salt),
+      iter: ITER,
+      builtAt: new Date().toISOString()
+    }));
+  }
 
   console.log(`\n🎉 [동기화 성공] 노션 노트 ${nodes.length}개 수집 및 AES-256-GCM 암호화 완료! (갱신 본문: ${fetched}개)`);
 }
