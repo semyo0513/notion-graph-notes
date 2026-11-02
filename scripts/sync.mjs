@@ -44,6 +44,17 @@ const b64 = u8 => Buffer.from(u8).toString('base64');
 const unb64 = s => new Uint8Array(Buffer.from(s, 'base64'));
 const exists = p => fs.access(p).then(() => true, () => false);
 
+/* ───── 텍스트 추출 헬퍼 (배열/객체/문자열 방어) ───── */
+function getPlainText(field) {
+  if (!field) return '';
+  if (Array.isArray(field)) {
+    return field.map(t => t?.plain_text || t?.text?.content || '').filter(Boolean).join('');
+  }
+  if (typeof field === 'string') return field;
+  if (typeof field === 'object' && field.plain_text) return String(field.plain_text);
+  return '';
+}
+
 /* ───── Notion API 직접 호출 ───── */
 async function notion(method, path, body) {
   for (let i = 0; i < 5; i++) {
@@ -80,18 +91,30 @@ async function notion(method, path, body) {
   throw new Error('Notion API 요청 실패 (최대 재시도 초과)');
 }
 
-/* ───── 노션 페이지 오브젝트 -> 그래프 노드 변환 ───── */
+/* ───── 노션 페이지 오브젝트 -> 그래프 노드 변환 (완전 방어) ───── */
 function extractTitleFromProperties(P, iconEmoji = '') {
   let title = '';
-  // 1. type === 'title' 속성 검색
-  const titleKey = Object.keys(P || {}).find(k => P[k]?.type === 'title');
-  if (titleKey && Array.isArray(P[titleKey].title)) {
-    title = P[titleKey].title.map(t => t.plain_text).join('');
+  if (P && typeof P === 'object') {
+    // 1. type === 'title' 속성 검색
+    const titleKey = Object.keys(P).find(k => P[k]?.type === 'title');
+    if (titleKey && P[titleKey]?.title) {
+      title = getPlainText(P[titleKey].title);
+    }
+    // 2. 주요 속성명 안전 검색
+    const candidates = ['이름', '제목', 'title', 'Name', '페이지'];
+    for (const key of candidates) {
+      if (!title && P[key]) {
+        title = getPlainText(P[key].title) || getPlainText(P[key].rich_text);
+      }
+    }
+    // 3. 아무것도 못 찾았을 경우 첫 번째 rich_text
+    if (!title) {
+      const richKey = Object.keys(P).find(k => P[k]?.type === 'rich_text');
+      if (richKey && P[richKey]?.rich_text) {
+        title = getPlainText(P[richKey].rich_text);
+      }
+    }
   }
-  // 2. '이름', '제목', 'Name', 'title' 직접 검색
-  if (!title && P?.['이름']?.title) title = P['이름'].title.map(t => t.plain_text).join('');
-  if (!title && P?.['제목']?.title) title = P['제목'].title.map(t => t.plain_text).join('');
-  if (!title && P?.['title']?.title) title = P['title'].title.map(t => t.plain_text).join('');
 
   title = title.trim();
   if (iconEmoji) {
@@ -111,7 +134,7 @@ function toNode(p, fallbackFolder = '기본') {
     const key = Object.keys(P).find(k => P[k]?.type === 'multi_select');
     if (key) tagsProp = P[key].multi_select;
   }
-  const tags = (tagsProp || []).map(t => t.name);
+  const tags = Array.isArray(tagsProp) ? tagsProp.map(t => t?.name).filter(Boolean) : [];
 
   // 폴더
   let folderProp = P['폴더']?.select?.name;
@@ -121,7 +144,7 @@ function toNode(p, fallbackFolder = '기본') {
   }
   const folder = folderProp || fallbackFolder || '기본';
 
-  const summary = ((P['요약']?.rich_text) || []).map(t => t.plain_text).join('');
+  const summary = getPlainText(P['요약']?.rich_text);
 
   // 연결
   let linksProp = P['연결']?.relation;
@@ -129,7 +152,7 @@ function toNode(p, fallbackFolder = '기본') {
     const key = Object.keys(P).find(k => P[k]?.type === 'relation');
     if (key) linksProp = P[key].relation;
   }
-  const links = (linksProp || []).map(r => r.id);
+  const links = Array.isArray(linksProp) ? linksProp.map(r => r?.id).filter(Boolean) : [];
 
   return {
     id: p.id,
@@ -183,15 +206,14 @@ async function collectPageTree(rootPageId, visitedIds = new Set(), depth = 0, pa
   visitedIds.add(cleanId);
 
   // 1. 현재 페이지 메타데이터 조회
-  let currentPageObj = null;
   try {
-    currentPageObj = await notion('GET', `/pages/${cleanId}`);
+    const currentPageObj = await notion('GET', `/pages/${cleanId}`);
     const currentNode = toNode(currentPageObj, parentTitle);
     nodes.push(currentNode);
-    console.log(`  ${'  '.repeat(depth)}📄 [페이지 수집] "${currentNode.title}" (ID: ${cleanId})`);
+    console.log(`  ${'  '.repeat(depth)}📄 [페이지] "${currentNode.title}" (ID: ${cleanId})`);
     parentTitle = currentNode.title;
   } catch (err) {
-    console.log(`  ${'  '.repeat(depth)}⚠️ 페이지 메타데이터 조회 실패 (${cleanId}): ${err.message}`);
+    console.log(`  ${'  '.repeat(depth)}⚠️ 페이지 조회 실패 (${cleanId}): ${err.message}`);
   }
 
   // 2. 현재 페이지의 자식 블록들 조회
@@ -213,14 +235,15 @@ async function collectPageTree(rootPageId, visitedIds = new Set(), depth = 0, pa
       // (B) 하위 자식 데이터베이스(child_database) 행 수집
       else if (b.type === 'child_database') {
         const dbTitle = b.child_database?.title || '데이터베이스';
-        console.log(`  ${'  '.repeat(depth + 1)}📊 [자식 DB 발견] "${dbTitle}" (ID: ${b.id})`);
+        console.log(`  ${'  '.repeat(depth + 1)}📊 [자식 DB] "${dbTitle}" (ID: ${b.id})`);
         try {
           const dsId = await resolveDbToDataSource(b.id);
           const dbNodes = await queryDataSource(dsId);
           console.log(`  ${'  '.repeat(depth + 1)}  -> DB 내부 ${dbNodes.length}개 노트 수집 완료`);
           for (const dn of dbNodes) {
-            if (!visitedIds.has(dn.id.replace(/-/g, ''))) {
-              visitedIds.add(dn.id.replace(/-/g, ''));
+            const cleanDnId = dn.id.replace(/-/g, '');
+            if (!visitedIds.has(cleanDnId)) {
+              visitedIds.add(cleanDnId);
               dn.folder = dbTitle;
               nodes.push(dn);
             }
@@ -236,46 +259,14 @@ async function collectPageTree(rootPageId, visitedIds = new Set(), depth = 0, pa
   return nodes;
 }
 
-/* ───── 봇에게 공유된 모든 페이지/DB 통합 검색 ───── */
-async function searchAllAccessibleItems() {
+/* ───── 봇에게 공유된 최상위 항목 가벼운 탐색 (최대 100건) ───── */
+async function getTopAccessibleItems() {
   const items = [];
-  // 1. 페이지 검색
   try {
-    let cursor = null;
-    do {
-      const res = await notion('POST', '/search', {
-        filter: { property: 'object', value: 'page' },
-        page_size: 100,
-        ...(cursor && { start_cursor: cursor })
-      });
-      items.push(...(res.results || []));
-      cursor = res.has_more ? res.next_cursor : null;
-    } while (cursor);
+    const res = await notion('POST', '/search', { page_size: 50 });
+    items.push(...(res.results || []));
   } catch {}
 
-  // 2. 데이터소스/데이터베이스 검색
-  try {
-    let cursor = null;
-    do {
-      const res = await notion('POST', '/search', {
-        filter: { property: 'object', value: 'data_source' },
-        page_size: 100,
-        ...(cursor && { start_cursor: cursor })
-      });
-      items.push(...(res.results || []));
-      cursor = res.has_more ? res.next_cursor : null;
-    } while (cursor);
-  } catch {}
-
-  // 3. 일반 검색 (필터 없는 호환 검색)
-  if (items.length === 0) {
-    try {
-      const res = await notion('POST', '/search', { page_size: 100 });
-      items.push(...(res.results || []));
-    } catch {}
-  }
-
-  // 중복 ID 제거
   const uniqueItems = [];
   const seen = new Set();
   for (const it of items) {
@@ -288,7 +279,7 @@ async function searchAllAccessibleItems() {
   return uniqueItems;
 }
 
-/* ───── 스마트 통합 수집 엔진: Page 트리 + DB 행 모두 포괄 ───── */
+/* ───── 스마트 통합 수집 엔진 ───── */
 async function collectAllNotionNotes() {
   console.log('\n=== [2/4] Notion 통합 봇 및 워크스페이스 진단 ===');
 
@@ -304,89 +295,86 @@ async function collectAllNotionNotes() {
     throw err;
   }
 
-  const accessibleItems = await searchAllAccessibleItems();
-  console.log(`• 현재 봇 "${botInfo.name}" 에게 검색된 항목: 총 ${accessibleItems.length}개`);
-  for (const item of accessibleItems) {
-    const cleanId = item.id.replace(/-/g, '');
-    let title = '(제목 없음)';
-    if (item.properties) title = extractTitleFromProperties(item.properties, item.icon?.emoji);
-    else if (item.title && Array.isArray(item.title)) title = item.title.map(t => t.plain_text).join('');
-    console.log(`  - [${item.object}] "${title}" (ID: ${cleanId})`);
-  }
-
   const allNodesMap = new Map();
   const visitedIds = new Set();
 
-  // (1) 사용자가 명시한 DATA_SOURCE_ID (RAW_ID)가 있는 경우
+  // (1) [최우선] 사용자가 지정한 DATA_SOURCE_ID(RAW_ID)가 있는 경우
   if (RAW_ID) {
-    console.log(`\n• [타겟 분석] 사용자가 지정한 ID (${RAW_ID}) 수집 시작...`);
+    console.log(`\n• [타겟 분석] 사용자 지정 ID (${RAW_ID}) 탐색 중...`);
 
-    // A. 만약 Page인 경우 -> Page 및 하위 자식 페이지/DB 트리 재귀 수집!
-    let isPage = false;
+    // A. Page인지 확인 -> Page 및 하위 자식 문서 트리 재귀 수집!
     try {
       const pageTest = await notion('GET', `/pages/${RAW_ID}`);
       if (pageTest && pageTest.object === 'page') {
-        isPage = true;
         const pageTitle = extractTitleFromProperties(pageTest.properties, pageTest.icon?.emoji);
-        console.log(`✓ 입력된 ID는 [Page] "${pageTitle}" 입니다. 하위 문서 트리를 재귀적으로 수집합니다...`);
+        console.log(`🎉 [확인 성공] 입력된 ID는 노션 [Page] "${pageTitle}" 입니다!`);
+        console.log(`• 하위 자식 문서 트리를 재귀적으로 수집합니다...`);
         const treeNodes = await collectPageTree(RAW_ID, visitedIds, 0, pageTitle);
         for (const n of treeNodes) allNodesMap.set(n.id, n);
-        console.log(`🎉 [트리 수집 완료] 루트 페이지 및 하위 문서: 총 ${treeNodes.length}개 노트 수집됨!`);
+        console.log(`✓ 트리 수집 완료: 총 ${treeNodes.length}개 노트 수집됨!`);
       }
-    } catch {}
+    } catch (e1) {
+      console.log(`  (Page 직접 조회 실패: ${e1.details || e1.message})`);
+    }
 
-    // B. 만약 Database인 경우 -> Data Source 도출 후 행(rows) 수집!
-    if (!isPage) {
+    // B. Database인지 확인 -> Data Source 도출 후 행(rows) 수집!
+    if (allNodesMap.size === 0) {
       try {
         const dbTest = await notion('GET', `/databases/${RAW_ID}`);
         if (dbTest && dbTest.object === 'database') {
           const dbTitle = (dbTest.title || []).map(t => t.plain_text).join('') || '데이터베이스';
-          console.log(`✓ 입력된 ID는 [Database] "${dbTitle}" 입니다. 내부 노트를 수집합니다...`);
+          console.log(`🎉 [확인 성공] 입력된 ID는 노션 [Database] "${dbTitle}" 입니다!`);
           const dsId = await resolveDbToDataSource(RAW_ID);
           const dbNodes = await queryDataSource(dsId);
           for (const n of dbNodes) allNodesMap.set(n.id, n);
-          console.log(`🎉 [DB 수집 완료] 총 ${dbNodes.length}개 노트 수집됨!`);
+          console.log(`✓ DB 수집 완료: 총 ${dbNodes.length}개 노트 수집됨!`);
         }
-      } catch {}
+      } catch (e2) {
+        console.log(`  (Database 직접 조회 실패: ${e2.details || e2.message})`);
+      }
     }
 
-    // C. 만약 Data Source인 경우 -> 바로 queryDataSource
+    // C. Data Source 직접 쿼리
     if (allNodesMap.size === 0) {
       try {
         const dsNodes = await queryDataSource(RAW_ID);
         if (dsNodes.length > 0) {
-          console.log(`✓ 입력된 ID는 [Data Source] 입니다. 총 ${dsNodes.length}개 노트 수집됨!`);
+          console.log(`🎉 [확인 성공] 입력된 ID는 유효한 [Data Source] 입니다! (총 ${dsNodes.length}개 노트 수집)`);
           for (const n of dsNodes) allNodesMap.set(n.id, n);
         }
-      } catch {}
+      } catch (e3) {
+        console.log(`  (Data Source 직접 쿼리 실패: ${e3.details || e3.message})`);
+      }
     }
   }
 
-  // (2) 사용자가 노션 권한 관리에서 수동으로 선택해 준 최상위 페이지들이 있다면 추가 탐색
-  console.log(`\n• [권한 페이지 통합] 봇에게 공유된 페이지 목록을 점검합니다...`);
-  const sharedPages = accessibleItems.filter(i => i.object === 'page');
-  for (const pageItem of sharedPages) {
-    const cleanId = pageItem.id.replace(/-/g, '');
-    if (!visitedIds.has(cleanId)) {
-      const pTitle = extractTitleFromProperties(pageItem.properties, pageItem.icon?.emoji);
-      console.log(`• 공유된 페이지 [${pTitle}] (ID: ${cleanId}) 하위 문서 탐색...`);
-      const subTree = await collectPageTree(cleanId, visitedIds, 1, pTitle);
-      for (const n of subTree) allNodesMap.set(n.id, n);
-    }
-  }
-
-  // (3) 공유된 데이터소스가 있다면 추가 수집 (단, 기존 노드가 0개일 때 또는 추가 보강)
+  // (2) 만약 아직 노드가 0개이거나, 봇에게 공유된 다른 최상위 페이지들이 있다면 가볍게 보강
   if (allNodesMap.size === 0) {
-    const sharedDataSources = accessibleItems.filter(i => i.object === 'data_source');
-    for (const ds of sharedDataSources) {
-      try {
-        const rows = await queryDataSource(ds.id);
-        if (rows.length > 0) {
-          console.log(`• 공유된 데이터소스 [${ds.id}]에서 ${rows.length}개 노트를 수집했습니다.`);
-          for (const n of rows) allNodesMap.set(n.id, n);
-          break;
-        }
-      } catch {}
+    console.log(`\n• [공유 항목 탐색] 봇에게 연결된 다른 페이지들을 탐색합니다...`);
+    const accessibleItems = await getTopAccessibleItems();
+    console.log(`• 발견된 항목: ${accessibleItems.length}개`);
+
+    for (const item of accessibleItems) {
+      const cleanId = item.id.replace(/-/g, '');
+      if (visitedIds.has(cleanId)) continue;
+
+      if (item.object === 'page') {
+        const pTitle = extractTitleFromProperties(item.properties, item.icon?.emoji);
+        console.log(`• 공유 페이지 [${pTitle}] (ID: ${cleanId}) 트리 수집 시작...`);
+        const subTree = await collectPageTree(cleanId, visitedIds, 0, pTitle);
+        for (const n of subTree) allNodesMap.set(n.id, n);
+        if (allNodesMap.size >= 100) break; // 과도한 수집 방지
+      } else if (item.object === 'data_source' || item.object === 'database') {
+        try {
+          const dsId = item.object === 'database' ? await resolveDbToDataSource(cleanId) : cleanId;
+          const rows = await queryDataSource(dsId);
+          if (rows.length > 0) {
+            console.log(`• 공유 DB/데이터소스 [${cleanId}]에서 ${rows.length}개 노트 수집 완료`);
+            for (const n of rows) allNodesMap.set(n.id, n);
+            break;
+          }
+        } catch {}
+      }
     }
   }
 
@@ -394,10 +382,10 @@ async function collectAllNotionNotes() {
   if (finalNodes.length === 0) {
     const ws = botInfo.bot?.owner?.workspace_name || '(소속 워크스페이스)';
     throw new Error(
-      `통합 봇 "${botInfo.name}" 에게서 수집할 수 있는 노션 노트나 페이지가 0개입니다.\n\n` +
+      `통합 봇 "${botInfo.name}" 에게서 노션 노트를 수집하지 못했습니다.\n\n` +
       `[확인 사항]:\n` +
-      `1. 노션 소속 워크스페이스: [${ws}]\n` +
-      `2. 노션에서 연동할 페이지 우측 상단 [···] -> [연결(Connections)]에 "${botInfo.name}" 봇이 추가되어 있는지 확인하세요.`
+      `1. 노션 워크스페이스: [${ws}]\n` +
+      `2. 대상 페이지 우측 상단 [···] -> [연결]에 "${botInfo.name}" 봇이 추가되었는지 확인하세요.`
     );
   }
 
@@ -529,7 +517,7 @@ async function fetchPageMarkdown(pageId) {
     for (const b of blocksRes.results || []) {
       const type = b.type;
       const rich = b[type]?.rich_text;
-      const text = (rich || []).map(t => t.plain_text).join('');
+      const text = getPlainText(rich);
       if (type.startsWith('heading_1')) lines.push(`# ${text}`);
       else if (type.startsWith('heading_2')) lines.push(`## ${text}`);
       else if (type.startsWith('heading_3')) lines.push(`### ${text}`);
@@ -552,7 +540,7 @@ async function main() {
   await fs.mkdir(`${OUT}/n`, { recursive: true });
 
   const nodes = await collectAllNotionNotes();
-  console.log(`\n• 노션 전체 수집 결과: 총 ${nodes.length}개 노트 확보 완료!`);
+  console.log(`\n• 노션 최종 수집 결과: 총 ${nodes.length}개 노트 확보 완료!`);
 
   console.log(`\n=== [3/4] 암호화 키 도출 및 캐시 검사 ===`);
   const prevMeta = await fs.readFile(`${OUT}/meta.json`, 'utf8').then(JSON.parse, () => null);
