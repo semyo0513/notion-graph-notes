@@ -221,10 +221,31 @@ async function resolveDataSourceId() {
         if (childDs) return childDs;
       }
     }
+
+    // [중요] 사용자가 DATA_SOURCE_ID를 명시했으나 해당 ID가 유효하지 않은 경우:
+    // 엉뚱한 다른 DB(예: 기분/트래커 DB 등)를 멋대로 자동 선택하여 덮어쓰지 않도록 차단합니다!
+    const availableList = accessibleItems
+      .map(i => {
+        let t = '(제목 없음)';
+        if (i.title && Array.isArray(i.title)) t = i.title.map(x => x.plain_text).join('');
+        else if (i.properties?.['이름']?.title) t = i.properties['이름'].title.map(x => x.plain_text).join('');
+        return `   • [${i.object}] "${t}" (ID: ${i.id.replace(/-/g, '')})`;
+      })
+      .join('\n');
+
+    throw new Error(
+      `입력하신 DATA_SOURCE_ID (${RAW_ID})에 해당하는 노션 데이터베이스를 찾을 수 없습니다.\n\n` +
+      `[현재 통합 봇 "${botInfo.name}" 에게 연결된 항목 목록]:\n` +
+      (availableList || '   (연결된 항목이 전혀 없습니다)') + '\n\n' +
+      `[해결 방법]:\n` +
+      `1. 연동하고자 하는 '진짜 노션 데이터베이스' 페이지를 노션 웹/앱에서 엽니다.\n` +
+      `2. 페이지 우측 상단 [···] -> 맨 아래 [연결(Connections)] -> [${botInfo.name}] 봇을 반드시 추가해 주세요!\n` +
+      `3. 데이터베이스 제목 우측 [···] -> [데이터 소스 관리] -> [데이터 소스 ID 복사]하여 GitHub Secrets의 DATA_SOURCE_ID에 입력하세요.`
+    );
   }
 
-  // 4. [2순위 자동 탐색 Fallback] 사용자가 ID를 입력하지 않았거나, 위 검증에서 매칭되지 않은 경우
-  console.log(`\n• [2순위 자동 탐색] 워크스페이스 내 최적의 데이터 소스 후보를 탐색합니다...`);
+  // 4. [2순위 자동 탐색 Fallback] 사용자가 ID를 전혀 입력하지 않은 경우에만 자동 매칭 진행
+  console.log(`\n• [2순위 자동 탐색] DATA_SOURCE_ID가 비어 있어 워크스페이스 내 최적의 데이터 소스 후보를 탐색합니다...`);
 
   // 가능한 모든 Data Source 후보 수집
   const candidates = [];
