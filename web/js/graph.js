@@ -199,6 +199,11 @@ export class GraphView {
       .linkDirectionalParticleWidth(link => (this.highlightLinks.has(link) ? 3 : 1.8))
       .linkDirectionalParticleColor(() => '#a855f7')
       .nodeCanvasObject((node, ctx, globalScale) => {
+        // 검색/필터 적용 시 일치하지 않는 노드는 화면에 표시하지 않음
+        if (this.filterMatchIds !== null && !this.filterMatchIds.has(node.id)) {
+          return;
+        }
+
         // 타임라인 컷오프 이전 노드만 가시화
         if (this.timelineCutoff && new Date(node.edited || 0).getTime() > this.timelineCutoff) {
           return;
@@ -209,9 +214,7 @@ export class GraphView {
         const isHighlighted = this.highlightNodes.has(node);
 
         let isDimmed = false;
-        if (this.filterMatchIds !== null && !this.filterMatchIds.has(node.id)) {
-          isDimmed = true;
-        } else if (this.highlightNodes.size > 0 && !isHighlighted) {
+        if (this.highlightNodes.size > 0 && !isHighlighted) {
           isDimmed = true;
         }
 
@@ -236,7 +239,7 @@ export class GraphView {
           ctx.stroke();
         }
 
-        const showLabel = !isDimmed && (globalScale > 1.2 || isSelected || isHovered || isHighlighted || size > 6);
+        const showLabel = !isDimmed && (globalScale > 1.2 || isSelected || isHovered || isHighlighted || size > 6 || (this.filterMatchIds && this.filterMatchIds.size < 15));
         if (showLabel) {
           const label = node.title || '';
           const fontSize = Math.max(10 / globalScale, 3);
@@ -248,6 +251,9 @@ export class GraphView {
         }
       })
       .nodePointerAreaPaint((node, color, ctx) => {
+        if (this.filterMatchIds !== null && !this.filterMatchIds.has(node.id)) {
+          return;
+        }
         const size = this.calcNodeRadius(node) + 4;
         ctx.fillStyle = color;
         ctx.beginPath();
@@ -446,17 +452,67 @@ export class GraphView {
 
   applyFilter(matchedIdsSet) {
     this.filterMatchIds = matchedIdsSet;
-    if (this.graphInstance && !this.mode3D) {
-      this.graphInstance.nodeColor(this.graphInstance.nodeColor());
 
-      if (matchedIdsSet && matchedIdsSet.size > 0) {
-        this.graphInstance.zoomToFit(800, 70, node => matchedIdsSet.has(node.id));
-        const matchedNodes = this.nodes.filter(n => matchedIdsSet.has(n.id));
-        for (const n of matchedNodes) {
-          n.vx = (n.vx || 0) * 0.5 - (n.x || 0) * 0.05;
-          n.vy = (n.vy || 0) * 0.5 - (n.y || 0) * 0.05;
-        }
+    if (!this.graphInstance) return;
+
+    if (matchedIdsSet === null) {
+      // 1. 필터 해제: 전체 노드 및 엣지 복원
+      this.rebuildGraphData();
+      this.graphInstance.graphData({ nodes: this.nodes, links: this.links });
+      if (!this.mode3D) {
         this.graphInstance.d3ReheatSimulation();
+        this.graphInstance.zoomToFit(600, 50);
+      } else {
+        this.graphInstance.cameraPosition({ x: 0, y: 0, z: 400 }, { x: 0, y: 0, z: 0 }, 600);
+      }
+      return;
+    }
+
+    // 2. 필터 적용: 검색된 노드 및 그 노드들 간의 연결선만 추출
+    const filteredNodes = this.rawNodes
+      .filter(n => matchedIdsSet.has(n.id))
+      .map(n => ({ ...n }));
+
+    const validIdSet = new Set(filteredNodes.map(n => n.id));
+    const filteredLinks = this.rawEdges
+      .filter(([a, b]) => validIdSet.has(a) && validIdSet.has(b))
+      .map(([source, target]) => ({ source, target }));
+
+    // 이웃 및 연결선 매핑 재구성
+    this.nodeMap.clear();
+    for (const n of filteredNodes) {
+      n.neighbors = new Set();
+      n.links = new Set();
+      this.nodeMap.set(n.id, n);
+    }
+
+    for (const l of filteredLinks) {
+      const a = this.nodeMap.get(typeof l.source === 'object' ? l.source.id : l.source);
+      const b = this.nodeMap.get(typeof l.target === 'object' ? l.target.id : l.target);
+      if (a && b) {
+        a.neighbors.add(b);
+        b.neighbors.add(a);
+        a.links.add(l);
+        b.links.add(l);
+      }
+    }
+
+    this.nodes = filteredNodes;
+    this.links = filteredLinks;
+
+    // 그래프 인스턴스에 필터링된 데이터 반영
+    this.graphInstance.graphData({ nodes: this.nodes, links: this.links });
+
+    if (!this.mode3D) {
+      if (filteredNodes.length > 0) {
+        setTimeout(() => {
+          this.graphInstance.zoomToFit(600, 70);
+        }, 100);
+      }
+      this.graphInstance.d3ReheatSimulation();
+    } else {
+      if (filteredNodes.length > 0) {
+        this.graphInstance.cameraPosition({ x: 0, y: 0, z: 280 }, { x: 0, y: 0, z: 0 }, 800);
       }
     }
   }

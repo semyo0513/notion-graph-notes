@@ -515,8 +515,26 @@ class App {
       }
     }
 
-    // 그래프 뷰에 필터 및 중앙 집중 재정렬 적용
+    // 그래프 뷰에 검색된 노드들만 표시
     this.graphView.applyFilter(matchedIds);
+
+    // 좌측 노트 탐색기 목록도 검색된 노드들만 표시
+    if (this.explorerView) {
+      if (matchedIds !== null) {
+        const filteredList = this.rawNodes.filter(n => matchedIds.has(n.id));
+        this.explorerView.setNodes(filteredList);
+      } else {
+        this.explorerView.setNodes(this.rawNodes);
+      }
+    }
+
+    // HUD 카운트 업데이트
+    if (this.nodeCountEl) {
+      this.nodeCountEl.textContent = matchedIds !== null ? matchedIds.size : this.rawNodes.length;
+    }
+    if (this.edgeCountEl) {
+      this.edgeCountEl.textContent = this.graphView.links ? this.graphView.links.length : 0;
+    }
   }
 
   async sendAiMessage(question) {
